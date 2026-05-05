@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { MEDICATIONS, SLOT_EMOJI, SLOT_LABEL, SLOT_ORDER, groupBySlot } from '@/lib/medications';
 import { getLogsForDate } from '@/lib/db';
+import { amsterdamParts } from '@/lib/status';
 import type { LogEntry } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
@@ -14,12 +15,13 @@ const MONTH_NAMES = [
 
 function parseISO(date: string): Date | null {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return null;
-  const d = new Date(`${date}T12:00:00`);
+  const d = new Date(`${date}T12:00:00Z`);
   return isNaN(d.getTime()) ? null : d;
 }
 
 function formatDutchDate(d: Date): string {
-  return `${DAY_NAMES[d.getDay()]} ${d.getDate()} ${MONTH_NAMES[d.getMonth()]} ${d.getFullYear()}`;
+  const { weekday, day, month, year } = amsterdamParts(d);
+  return `${DAY_NAMES[weekday]} ${day} ${MONTH_NAMES[month - 1]} ${year}`;
 }
 
 export default async function HistoryDayPage({ params }: { params: Promise<{ date: string }> }) {

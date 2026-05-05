@@ -1,5 +1,6 @@
 import { MEDICATIONS, getMedicationById } from './medications';
 import { getAllCustomSchedule, type ScheduleRow } from './db';
+import { amsterdamParts } from './status';
 import type { Medication, Slot } from './types';
 
 export const WEEKDAY_NAMES = ['maandag', 'dinsdag', 'woensdag', 'donderdag', 'vrijdag', 'zaterdag', 'zondag'];
@@ -10,13 +11,13 @@ export function jsDayToMonFirst(jsDay: number): number {
 }
 
 export function dayOfWeekForDate(date: Date): number {
-  return jsDayToMonFirst(date.getDay());
+  return jsDayToMonFirst(amsterdamParts(date).weekday);
 }
 
 export function slotForTime(time: string): Slot {
   const [h] = time.split(':').map(Number);
   if (h < 12) return 'ochtend';
-  if (h < 17) return 'middag';
+  if (h < 18) return 'middag';
   return 'avond';
 }
 

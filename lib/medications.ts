@@ -84,8 +84,8 @@ export function getMedicationById(id: string): Medication | undefined {
   return MEDICATIONS.find((m) => m.id === id);
 }
 
-export function groupBySlot(meds: Medication[]): Record<Slot, Medication[]> {
-  const groups: Record<Slot, Medication[]> = { ochtend: [], middag: [], avond: [] };
+export function groupBySlot<T extends Medication>(meds: T[]): Record<Slot, T[]> {
+  const groups: Record<Slot, T[]> = { ochtend: [], middag: [], avond: [] };
   for (const m of meds) groups[m.slot].push(m);
   for (const slot of SLOT_ORDER) {
     groups[slot].sort((a, b) => a.time.localeCompare(b.time));

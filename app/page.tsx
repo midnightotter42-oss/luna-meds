@@ -1,10 +1,10 @@
 import Link from 'next/link';
 import { getLogsForDate, getLogsForDateRange } from '@/lib/db';
-import { attachStatus, todayISO } from '@/lib/status';
-import { getMedicationsForDate, slotForTime } from '@/lib/schedule';
-import { SLOT_LABEL } from '@/lib/medications';
-import type { Slot, LogEntry } from '@/lib/types';
-import ActiveMedCard from './components/ActiveMedCard';
+import { amsterdamParts, attachStatus, todayISO } from '@/lib/status';
+import { getMedicationsForDate } from '@/lib/schedule';
+import { SLOT_ORDER, groupBySlot } from '@/lib/medications';
+import type { LogEntry, MedicationWithStatus, Slot } from '@/lib/types';
+import SlotBlock, { type SlotVariant } from './components/SlotBlock';
 import LogDrawer, { type LogDrawerDay, type LogDrawerEntry } from './components/LogDrawer';
 
 export const dynamic = 'force-dynamic';
@@ -16,13 +16,14 @@ const MONTH_NAMES = [
 ];
 
 function formatDutchDate(d: Date): string {
-  return `${DAY_NAMES[d.getDay()]} ${d.getDate()} ${MONTH_NAMES[d.getMonth()]}`;
+  const { weekday, day, month } = amsterdamParts(d);
+  return `${DAY_NAMES[weekday]} ${day} ${MONTH_NAMES[month - 1]}`;
 }
 
 function currentSlot(now: Date): Slot {
-  const h = now.getHours();
-  if (h < 12) return 'ochtend';
-  if (h < 17) return 'middag';
+  const { hour } = amsterdamParts(now);
+  if (hour < 12) return 'ochtend';
+  if (hour < 18) return 'middag';
   return 'avond';
 }
 
@@ -86,6 +87,21 @@ async function buildLogDays(today: Date): Promise<LogDrawerDay[]> {
   });
 }
 
+function variantForSlot(
+  slot: Slot,
+  activeSlot: Slot,
+  meds: MedicationWithStatus[],
+): SlotVariant {
+  if (slot === activeSlot) return 'active';
+  const slotIdx = SLOT_ORDER.indexOf(slot);
+  const activeIdx = SLOT_ORDER.indexOf(activeSlot);
+  if (slotIdx < activeIdx) {
+    const allTaken = meds.every((m) => m.status === 'taken');
+    return allTaken ? 'past-complete' : 'past-incomplete';
+  }
+  return 'future';
+}
+
 export default async function HomePage() {
   const now = new Date();
   const date = todayISO(now);
@@ -99,14 +115,16 @@ export default async function HomePage() {
   const totalRequired = withStatus.filter((m) => m.required).length;
   const takenRequired = withStatus.filter((m) => m.required && m.status === 'taken').length;
 
-  const slot = currentSlot(now);
-  const pending = withStatus.filter((m) => m.status !== 'taken');
-  const inSlot = pending.filter((m) => slotForTime(m.time) === slot);
-  const activeMed = inSlot[0] ?? pending[0] ?? null;
+  const activeSlot = currentSlot(now);
+  const groups = groupBySlot(withStatus);
 
-  const allDoneForSlot = pending.length > 0 && inSlot.length === 0;
-  const allDoneForDay = withStatus.length > 0 && pending.length === 0;
+  const orderedSlots: Slot[] = [
+    activeSlot,
+    ...SLOT_ORDER.filter((s) => s !== activeSlot),
+  ];
+
   const noScheduleAtAll = withStatus.length === 0;
+  const allDoneForDay = !noScheduleAtAll && withStatus.every((m) => m.status === 'taken');
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -124,40 +142,42 @@ export default async function HomePage() {
         </Link>
       </header>
 
-      <div className="flex-1 flex flex-col items-center justify-center px-5 py-6">
-        <div className="w-full max-w-md">
-          {activeMed ? (
-            <ActiveMedCard med={activeMed} date={date} />
-          ) : allDoneForDay ? (
-            <div className="bg-white/95 backdrop-blur rounded-3xl shadow-xl p-8 text-center animate-slide-up">
-              <div className="text-6xl mb-3">🎉</div>
-              <h2 className="text-2xl font-bold text-slate-800">Alles gedaan vandaag!</h2>
-              <p className="text-slate-600 mt-2">Goed bezig 💖</p>
-            </div>
-          ) : allDoneForSlot ? (
-            <div className="bg-white/95 backdrop-blur rounded-3xl shadow-xl p-8 text-center animate-slide-up">
-              <div className="text-5xl mb-3">✅</div>
-              <h2 className="text-2xl font-bold text-slate-800">
-                Alles gedaan voor de {SLOT_LABEL[slot].toLowerCase()}!
-              </h2>
-              <p className="text-slate-600 mt-2">Volgende komt later op de dag.</p>
-            </div>
-          ) : noScheduleAtAll ? (
+      <div className="flex-1 flex flex-col px-5 py-6">
+        <div className="w-full max-w-md mx-auto space-y-4">
+          {noScheduleAtAll ? (
             <div className="bg-white/95 backdrop-blur rounded-3xl shadow-xl p-8 text-center animate-slide-up">
               <div className="text-5xl mb-3">😌</div>
               <h2 className="text-2xl font-bold text-slate-800">Geen medicatie vandaag</h2>
               <p className="text-slate-600 mt-2">Vrije dag — geniet ervan!</p>
             </div>
           ) : (
-            <div className="bg-white/95 backdrop-blur rounded-3xl shadow-xl p-8 text-center animate-slide-up">
-              <div className="text-5xl mb-3">😌</div>
-              <h2 className="text-2xl font-bold text-slate-800">Geen medicatie nu</h2>
-              <p className="text-slate-600 mt-2">Goed gedaan vandaag!</p>
-            </div>
+            <>
+              {allDoneForDay && (
+                <div className="bg-white/95 backdrop-blur rounded-3xl shadow-xl p-6 text-center animate-slide-up">
+                  <div className="text-5xl mb-2">🎉</div>
+                  <h2 className="text-2xl font-bold text-slate-800">Alles gedaan vandaag!</h2>
+                  <p className="text-slate-600 mt-1">Goed bezig 💖</p>
+                </div>
+              )}
+              {orderedSlots.map((slot) => {
+                const slotMeds = groups[slot];
+                if (slotMeds.length === 0) return null;
+                const variant = variantForSlot(slot, activeSlot, slotMeds);
+                return (
+                  <SlotBlock
+                    key={slot}
+                    slot={slot}
+                    meds={slotMeds}
+                    date={date}
+                    variant={variant}
+                  />
+                );
+              })}
+            </>
           )}
 
           {totalRequired > 0 && (
-            <div className="mt-5 bg-white/15 backdrop-blur rounded-2xl px-5 py-3 border border-white/20">
+            <div className="bg-white/15 backdrop-blur rounded-2xl px-5 py-3 border border-white/20">
               <div className="flex items-center justify-between text-white">
                 <span className="text-sm">Vandaag</span>
                 <span className="text-sm font-semibold">

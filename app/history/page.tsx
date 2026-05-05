@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import { MEDICATIONS } from '@/lib/medications';
 import { getLogsForDateRange } from '@/lib/db';
-import { todayISO } from '@/lib/status';
+import { amsterdamParts, todayISO } from '@/lib/status';
 import type { LogEntry } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
@@ -58,14 +58,15 @@ export default async function HistoryPage() {
               {days.map((d) => {
                 const iso = isoDate(d);
                 const isToday = iso === today;
+                const parts = amsterdamParts(d);
                 return (
                   <th key={iso} className="text-center font-medium pb-3 px-1 min-w-[44px]">
                     <Link
                       href={`/history/${iso}`}
                       className={`block hover:text-luna-accent ${isToday ? 'text-luna-accent' : 'text-slate-500'}`}
                     >
-                      <div className="text-xs uppercase">{DAY_NAMES_SHORT[d.getDay()]}</div>
-                      <div className="text-base font-semibold">{d.getDate()}</div>
+                      <div className="text-xs uppercase">{DAY_NAMES_SHORT[parts.weekday]}</div>
+                      <div className="text-base font-semibold">{parts.day}</div>
                     </Link>
                   </th>
                 );
