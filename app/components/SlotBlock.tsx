@@ -38,45 +38,13 @@ function playCheckSound() {
 
 interface MedRowProps {
   med: MedicationWithStatus;
-  date: string;
   emphasize: boolean;
+  flash: boolean;
 }
 
-function MedRow({ med, date, emphasize }: MedRowProps) {
-  const router = useRouter();
-  const inputRef = useRef<HTMLInputElement>(null);
-  const [submitting, setSubmitting] = useState(false);
-  const [justTaken, setJustTaken] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const taken = med.status === 'taken' || justTaken;
+function MedRow({ med, emphasize, flash }: MedRowProps) {
+  const taken = med.status === 'taken';
   const missed = !taken && med.status === 'missed';
-
-  async function onPhotoSelected(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    setSubmitting(true);
-    setError(null);
-    try {
-      const fd = new FormData();
-      fd.append('photo', file);
-      fd.append('medication_id', med.id);
-      fd.append('date', date);
-      const res = await fetch('/api/log', { method: 'POST', body: fd });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.error || 'Opslaan mislukt');
-      }
-      playCheckSound();
-      setJustTaken(true);
-      setTimeout(() => router.refresh(), 600);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Er ging iets mis');
-    } finally {
-      setSubmitting(false);
-      if (inputRef.current) inputRef.current.value = '';
-    }
-  }
 
   const rowBg = taken
     ? 'bg-green-50 border-green-200'
@@ -85,7 +53,7 @@ function MedRow({ med, date, emphasize }: MedRowProps) {
     : 'bg-white/70 border-slate-200';
 
   return (
-    <div className={`rounded-2xl border p-3 ${rowBg} ${justTaken ? 'animate-pulse-success' : ''}`}>
+    <div className={`rounded-2xl border p-3 ${rowBg} ${flash ? 'animate-pulse-success' : ''}`}>
       <div className="flex items-center justify-between gap-3">
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
@@ -111,35 +79,12 @@ function MedRow({ med, date, emphasize }: MedRowProps) {
             </p>
           )}
         </div>
-        <div className="shrink-0">
-          {taken ? (
-            <div className="w-10 h-10 rounded-full bg-green-500 text-white flex items-center justify-center text-xl font-bold">
-              ✓
-            </div>
-          ) : (
-            <>
-              <input
-                ref={inputRef}
-                type="file"
-                accept="image/*"
-                capture="environment"
-                className="hidden"
-                onChange={onPhotoSelected}
-                disabled={submitting}
-              />
-              <button
-                type="button"
-                onClick={() => inputRef.current?.click()}
-                disabled={submitting}
-                className="bg-green-500 hover:bg-green-600 active:bg-green-700 text-white font-bold py-2.5 px-4 rounded-xl text-sm shadow shadow-green-500/30 disabled:opacity-50 whitespace-nowrap"
-              >
-                {submitting ? 'Bezig…' : 'Genomen ✓'}
-              </button>
-            </>
-          )}
-        </div>
+        {taken && (
+          <div className="shrink-0 w-9 h-9 rounded-full bg-green-500 text-white flex items-center justify-center text-lg font-bold">
+            ✓
+          </div>
+        )}
       </div>
-      {error && <p className="text-xs text-red-600 mt-2">{error}</p>}
     </div>
   );
 }
@@ -152,26 +97,67 @@ interface SlotBlockProps {
 }
 
 export default function SlotBlock({ slot, meds, date, variant }: SlotBlockProps) {
+  const router = useRouter();
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [justTaken, setJustTaken] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
   const isActive = variant === 'active';
   const taken = meds.filter((m) => m.status === 'taken').length;
   const total = meds.length;
+  const allTaken = total > 0 && taken === total;
+  const pendingIds = meds.filter((m) => m.status !== 'taken').map((m) => m.id);
+
+  async function submitTaken(file?: File) {
+    if (pendingIds.length === 0 || submitting) return;
+    setSubmitting(true);
+    setError(null);
+    try {
+      const fd = new FormData();
+      for (const id of pendingIds) fd.append('medication_ids', id);
+      fd.append('date', date);
+      if (file) fd.append('photo', file);
+
+      const res = await fetch('/api/log', { method: 'POST', body: fd });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || 'Opslaan mislukt');
+      }
+      playCheckSound();
+      setJustTaken(true);
+      setTimeout(() => router.refresh(), 400);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Er ging iets mis');
+    } finally {
+      setSubmitting(false);
+      if (inputRef.current) inputRef.current.value = '';
+    }
+  }
+
+  async function onPhotoSelected(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    await submitTaken(file);
+  }
 
   const containerClass =
     variant === 'active'
       ? 'bg-white/95 backdrop-blur shadow-xl ring-2 ring-white/60 animate-slide-up'
-      : variant === 'past-complete'
+      : variant === 'past-complete' || allTaken
       ? 'bg-green-100/85 backdrop-blur shadow-md'
       : variant === 'past-incomplete'
       ? 'bg-slate-200/75 backdrop-blur shadow-md'
       : 'bg-white/40 backdrop-blur shadow-md';
 
   const labelTextClass = isActive ? 'text-slate-800' : 'text-slate-700';
-  const counterClass =
-    variant === 'past-complete'
-      ? 'text-green-700'
-      : variant === 'active'
-      ? 'text-blue-600'
-      : 'text-slate-600';
+  const counterClass = allTaken
+    ? 'text-green-700'
+    : variant === 'past-complete'
+    ? 'text-green-700'
+    : variant === 'active'
+    ? 'text-blue-600'
+    : 'text-slate-600';
 
   return (
     <div className={`rounded-3xl p-5 w-full ${containerClass}`}>
@@ -181,7 +167,7 @@ export default function SlotBlock({ slot, meds, date, variant }: SlotBlockProps)
             {SLOT_EMOJI[slot]}
           </span>
           <h2 className={`text-xl font-bold ${labelTextClass}`}>{SLOT_LABEL[slot]}</h2>
-          {isActive && (
+          {isActive && !allTaken && (
             <span className="text-xs uppercase tracking-wider font-semibold text-blue-500 ml-1">
               nu
             </span>
@@ -191,11 +177,47 @@ export default function SlotBlock({ slot, meds, date, variant }: SlotBlockProps)
           {taken}/{total}
         </span>
       </div>
+
       <div className="space-y-2">
         {meds.map((m) => (
-          <MedRow key={m.id} med={m} date={date} emphasize={isActive} />
+          <MedRow key={m.id} med={m} emphasize={isActive} flash={justTaken && m.status !== 'taken'} />
         ))}
       </div>
+
+      {!allTaken && (
+        <div className="mt-4">
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={() => submitTaken()}
+              disabled={submitting}
+              className="flex-1 bg-green-500 hover:bg-green-600 active:bg-green-700 text-white font-bold py-3 px-4 rounded-2xl shadow shadow-green-500/30 disabled:opacity-50"
+            >
+              {submitting ? 'Bezig…' : 'Genomen ✓'}
+            </button>
+            <input
+              ref={inputRef}
+              type="file"
+              accept="image/*"
+              capture="environment"
+              className="hidden"
+              onChange={onPhotoSelected}
+              disabled={submitting}
+            />
+            <button
+              type="button"
+              onClick={() => inputRef.current?.click()}
+              disabled={submitting}
+              aria-label="Maak een bewijsfoto"
+              title="Foto als bewijs"
+              className="bg-white hover:bg-slate-50 text-slate-700 font-bold py-3 px-4 rounded-2xl shadow border border-slate-200 disabled:opacity-50 text-xl leading-none"
+            >
+              📷
+            </button>
+          </div>
+          {error && <p className="text-xs text-red-600 mt-2">{error}</p>}
+        </div>
+      )}
     </div>
   );
 }

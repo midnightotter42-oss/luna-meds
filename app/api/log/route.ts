@@ -2,51 +2,143 @@ import { NextResponse } from 'next/server';
 import { createLog } from '@/lib/db';
 import { getMedicationById } from '@/lib/medications';
 import { timeHHMM, todayISO } from '@/lib/status';
+import type { LogEntry } from '@/lib/types';
 
 export const runtime = 'nodejs';
 
 const MAX_BYTES = 8 * 1024 * 1024;
-const ALLOWED_MIME = new Set(['image/jpeg', 'image/png', 'image/heic', 'image/heif', 'image/webp']);
+const ALLOWED_MIME = new Set([
+  'image/jpeg',
+  'image/png',
+  'image/heic',
+  'image/heif',
+  'image/webp',
+]);
 
-export async function POST(request: Request) {
+interface ParsedBody {
+  medicationIds: string[];
+  date: string;
+  photoPath: string | null;
+}
+
+type ParseResult = ParsedBody | { error: string; status: number };
+
+function validateDate(raw: string): string | null {
+  return /^\d{4}-\d{2}-\d{2}$/.test(raw) ? raw : null;
+}
+
+function validateBase64Photo(dataUrl: string): { ok: true; value: string } | { ok: false; error: string } {
+  const m = /^data:([^;]+);base64,(.+)$/.exec(dataUrl);
+  if (!m) return { ok: false, error: 'Ongeldige foto data URL' };
+  const mime = m[1];
+  if (!ALLOWED_MIME.has(mime)) return { ok: false, error: 'Bestandstype niet ondersteund' };
+  const approxBytes = Math.floor((m[2].length * 3) / 4);
+  if (approxBytes > MAX_BYTES) return { ok: false, error: 'Foto te groot (max 8MB)' };
+  return { ok: true, value: dataUrl };
+}
+
+async function parseRequest(request: Request): Promise<ParseResult> {
+  const contentType = request.headers.get('content-type') ?? '';
+
+  if (contentType.includes('application/json')) {
+    let body: Record<string, unknown>;
+    try {
+      body = (await request.json()) as Record<string, unknown>;
+    } catch {
+      return { error: 'Ongeldige JSON', status: 400 };
+    }
+
+    let ids: string[] = [];
+    if (Array.isArray(body.medication_ids)) {
+      ids = body.medication_ids.map((v) => String(v)).filter(Boolean);
+    } else if (typeof body.medication_id === 'string' && body.medication_id) {
+      ids = [body.medication_id];
+    }
+
+    const dateRaw = typeof body.date === 'string' ? body.date : todayISO();
+    const date = validateDate(dateRaw);
+    if (!date) return { error: 'Ongeldige datum', status: 400 };
+
+    let photoPath: string | null = null;
+    if (typeof body.photo === 'string' && body.photo.length > 0) {
+      const v = validateBase64Photo(body.photo);
+      if (!v.ok) return { error: v.error, status: 400 };
+      photoPath = v.value;
+    }
+
+    return { medicationIds: ids, date, photoPath };
+  }
+
   let formData: FormData;
   try {
     formData = await request.formData();
   } catch {
-    return NextResponse.json({ error: 'Ongeldige body, verwacht multipart/form-data' }, { status: 400 });
+    return { error: 'Ongeldige body, verwacht multipart/form-data of JSON', status: 400 };
   }
 
-  const medicationId = String(formData.get('medication_id') ?? '');
-  if (!medicationId || !getMedicationById(medicationId)) {
-    return NextResponse.json({ error: 'Onbekende medication_id' }, { status: 400 });
-  }
-  const date = String(formData.get('date') ?? todayISO());
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-    return NextResponse.json({ error: 'Ongeldige datum' }, { status: 400 });
+  let ids: string[] = formData
+    .getAll('medication_ids')
+    .flatMap((v) => String(v).split(','))
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (ids.length === 0) {
+    const single = formData.get('medication_id');
+    if (single) ids = [String(single)];
   }
 
-  const photo = formData.get('photo');
+  const dateRaw = String(formData.get('date') ?? todayISO());
+  const date = validateDate(dateRaw);
+  if (!date) return { error: 'Ongeldige datum', status: 400 };
+
   let photoPath: string | null = null;
-
+  const photo = formData.get('photo');
   if (photo && photo instanceof File && photo.size > 0) {
     if (photo.size > MAX_BYTES) {
-      return NextResponse.json({ error: 'Foto te groot (max 8MB)' }, { status: 400 });
+      return { error: 'Foto te groot (max 8MB)', status: 400 };
     }
     const mime = photo.type || 'image/jpeg';
     if (!ALLOWED_MIME.has(mime)) {
-      return NextResponse.json({ error: 'Bestandstype niet ondersteund' }, { status: 400 });
+      return { error: 'Bestandstype niet ondersteund', status: 400 };
     }
     const bytes = Buffer.from(await photo.arrayBuffer());
     photoPath = `data:${mime};base64,${bytes.toString('base64')}`;
+  } else if (typeof photo === 'string' && photo.length > 0) {
+    const v = validateBase64Photo(photo);
+    if (!v.ok) return { error: v.error, status: 400 };
+    photoPath = v.value;
   }
 
-  const log = await createLog({
-    date,
-    time_taken: timeHHMM(),
-    medication_id: medicationId,
-    taken: 1,
-    photo_path: photoPath,
-  });
+  return { medicationIds: ids, date, photoPath };
+}
 
-  return NextResponse.json({ ok: true, log });
+export async function POST(request: Request) {
+  const parsed = await parseRequest(request);
+  if ('error' in parsed) {
+    return NextResponse.json({ error: parsed.error }, { status: parsed.status });
+  }
+
+  const { medicationIds, date, photoPath } = parsed;
+  if (medicationIds.length === 0) {
+    return NextResponse.json({ error: 'medication_ids ontbreekt' }, { status: 400 });
+  }
+  for (const id of medicationIds) {
+    if (!getMedicationById(id)) {
+      return NextResponse.json({ error: `Onbekende medication_id: ${id}` }, { status: 400 });
+    }
+  }
+
+  const time = timeHHMM();
+  const logs: LogEntry[] = [];
+  for (const id of medicationIds) {
+    const log = await createLog({
+      date,
+      time_taken: time,
+      medication_id: id,
+      taken: 1,
+      photo_path: photoPath,
+    });
+    logs.push(log);
+  }
+
+  return NextResponse.json({ ok: true, logs });
 }

@@ -1,4 +1,4 @@
-const CACHE_NAME = 'luna-cache-v1';
+const CACHE_NAME = 'luna-cache-v2';
 const APP_SHELL = ['/', '/manifest.json', '/icon.svg', '/icon-192.png', '/icon-512.png'];
 
 self.addEventListener('install', (event) => {
