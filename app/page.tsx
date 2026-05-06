@@ -1,9 +1,9 @@
 import Link from 'next/link';
-import { getLogsForDate, getLogsForDateRange } from '@/lib/db';
+import { getLogsForDate, getLogsForDateRangeWithoutPhotos, type LogEntryNoPhoto } from '@/lib/db';
 import { amsterdamParts, attachStatus, todayISO } from '@/lib/status';
 import { getMedicationsForDate } from '@/lib/schedule';
 import { SLOT_ORDER, groupBySlot } from '@/lib/medications';
-import type { LogEntry, MedicationWithStatus, Slot } from '@/lib/types';
+import type { MedicationWithStatus, Slot } from '@/lib/types';
 import SlotBlock, { type SlotVariant } from './components/SlotBlock';
 import LogDrawer, { type LogDrawerDay, type LogDrawerEntry } from './components/LogDrawer';
 
@@ -45,7 +45,7 @@ async function buildLogDays(today: Date): Promise<LogDrawerDay[]> {
   }
   const fromDate = todayISO(days[days.length - 1]);
   const toDate = todayISO(days[0]);
-  const allLogs = await getLogsForDateRange(fromDate, toDate);
+  const allLogs = await getLogsForDateRangeWithoutPhotos(fromDate, toDate);
 
   const todayDateISO = todayISO(today);
 
@@ -58,7 +58,7 @@ async function buildLogDays(today: Date): Promise<LogDrawerDay[]> {
 
     const dayLogs = allLogs.filter((l) => l.date === iso && l.taken === 1);
     const seenMeds = new Set<string>();
-    const dedupedLogs: LogEntry[] = [];
+    const dedupedLogs: LogEntryNoPhoto[] = [];
     for (const log of dayLogs) {
       if (!seenMeds.has(log.medication_id)) {
         seenMeds.add(log.medication_id);
@@ -69,11 +69,12 @@ async function buildLogDays(today: Date): Promise<LogDrawerDay[]> {
     const entries: LogDrawerEntry[] = dedupedLogs.map((log) => {
       const med = meds.find((m) => m.id === log.medication_id);
       return {
+        log_id: log.id,
         medication_id: log.medication_id,
         medication_name: med?.name ?? log.medication_id,
         time_taken: log.time_taken,
         scheduled_time: med?.time ?? '',
-        photo_url: log.photo_path,
+        has_photo: log.has_photo,
       };
     });
 

@@ -1,9 +1,10 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import { MEDICATIONS, SLOT_EMOJI, SLOT_LABEL, SLOT_ORDER, groupBySlot } from '@/lib/medications';
-import { getLogsForDate } from '@/lib/db';
+import { SLOT_EMOJI, SLOT_LABEL, SLOT_ORDER, groupBySlot } from '@/lib/medications';
+import { getLogsForDateWithoutPhotos, type LogEntryNoPhoto } from '@/lib/db';
 import { amsterdamParts } from '@/lib/status';
-import type { LogEntry } from '@/lib/types';
+import { getMedicationsForDate } from '@/lib/schedule';
+import HistoryPhoto from './photo-client';
 
 export const dynamic = 'force-dynamic';
 
@@ -29,14 +30,20 @@ export default async function HistoryDayPage({ params }: { params: Promise<{ dat
   const parsed = parseISO(date);
   if (!parsed) notFound();
 
-  const logs = await getLogsForDate(date);
-  const logByMed = new Map<string, LogEntry>();
+  const [logs, meds] = await Promise.all([
+    getLogsForDateWithoutPhotos(date),
+    getMedicationsForDate(parsed),
+  ]);
+
+  const logByMed = new Map<string, LogEntryNoPhoto>();
   for (const log of logs) {
     if (log.taken === 1 && !logByMed.has(log.medication_id)) {
       logByMed.set(log.medication_id, log);
     }
   }
-  const groups = groupBySlot(MEDICATIONS);
+  const groups = groupBySlot(meds);
+
+  const noSchedule = meds.length === 0;
 
   return (
     <div className="space-y-6">
@@ -49,9 +56,15 @@ export default async function HistoryDayPage({ params }: { params: Promise<{ dat
         </h1>
       </div>
 
+      {noSchedule && (
+        <div className="bg-white rounded-2xl p-5 shadow-sm text-center text-slate-500">
+          Geen medicatie gepland voor deze dag.
+        </div>
+      )}
+
       {SLOT_ORDER.map((slot) => {
-        const meds = groups[slot];
-        if (meds.length === 0) return null;
+        const slotMeds = groups[slot];
+        if (slotMeds.length === 0) return null;
         return (
           <section key={slot} className="space-y-3">
             <h2 className="text-lg font-semibold text-slate-700 flex items-center gap-2 px-1">
@@ -59,7 +72,7 @@ export default async function HistoryDayPage({ params }: { params: Promise<{ dat
               <span>{SLOT_LABEL[slot]}</span>
             </h2>
             <div className="space-y-3">
-              {meds.map((m) => {
+              {slotMeds.map((m) => {
                 const log = logByMed.get(m.id);
                 const taken = !!log;
                 return (
@@ -93,14 +106,9 @@ export default async function HistoryDayPage({ params }: { params: Promise<{ dat
                         )}
                       </div>
                     </div>
-                    {taken && log?.photo_path && (
+                    {taken && log?.has_photo && (
                       <div className="mt-3">
-                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img
-                          src={log.photo_path}
-                          alt={`Foto van ${m.name}`}
-                          className="w-full max-w-xs rounded-xl border border-slate-200"
-                        />
+                        <HistoryPhoto logId={log.id} medName={m.name} />
                       </div>
                     )}
                   </div>

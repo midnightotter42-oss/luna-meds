@@ -40,6 +40,10 @@ export function initDb(): Promise<void> {
     await sql`CREATE INDEX IF NOT EXISTS idx_logs_date ON logs(date)`;
     await sql`CREATE INDEX IF NOT EXISTS idx_logs_date_med ON logs(date, medication_id)`;
     await sql`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_logs_unique_taken
+        ON logs(date, medication_id) WHERE taken = 1
+    `;
+    await sql`
       CREATE TABLE IF NOT EXISTS custom_schedule (
         id SERIAL PRIMARY KEY,
         day_of_week INTEGER NOT NULL,
@@ -51,6 +55,15 @@ export function initDb(): Promise<void> {
       )
     `;
     await sql`CREATE INDEX IF NOT EXISTS idx_custom_schedule_day ON custom_schedule(day_of_week)`;
+    await sql`
+      CREATE TABLE IF NOT EXISTS reminder_log (
+        id SERIAL PRIMARY KEY,
+        date TEXT NOT NULL,
+        tier TEXT NOT NULL,
+        sent_at TIMESTAMP DEFAULT NOW()
+      )
+    `;
+    await sql`CREATE INDEX IF NOT EXISTS idx_reminder_log_date ON reminder_log(date)`;
   })().catch((err) => {
     _initPromise = null;
     throw err;
@@ -79,9 +92,70 @@ export async function createLog(input: CreateLogInput): Promise<LogEntry> {
       ${input.photo_path ?? null},
       ${input.notes ?? null}
     )
+    ON CONFLICT (date, medication_id) WHERE taken = 1
+    DO UPDATE SET
+      time_taken = EXCLUDED.time_taken,
+      photo_path = COALESCE(EXCLUDED.photo_path, logs.photo_path)
     RETURNING *
   `) as LogEntry[];
   return rows[0];
+}
+
+export interface LogEntryNoPhoto {
+  id: number;
+  date: string;
+  time_taken: string | null;
+  medication_id: string;
+  taken: number;
+  notes: string | null;
+  created_at: string;
+  has_photo: boolean;
+}
+
+export async function getLogsForDateWithoutPhotos(date: string): Promise<LogEntryNoPhoto[]> {
+  await initDb();
+  return (await sql`
+    SELECT id, date, time_taken, medication_id, taken, notes, created_at,
+           (photo_path IS NOT NULL) AS has_photo
+    FROM logs WHERE date = ${date} ORDER BY created_at DESC
+  `) as LogEntryNoPhoto[];
+}
+
+export async function getLogsForDateRangeWithoutPhotos(
+  fromDate: string,
+  toDate: string,
+): Promise<LogEntryNoPhoto[]> {
+  await initDb();
+  return (await sql`
+    SELECT id, date, time_taken, medication_id, taken, notes, created_at,
+           (photo_path IS NOT NULL) AS has_photo
+    FROM logs
+    WHERE date >= ${fromDate} AND date <= ${toDate}
+    ORDER BY date ASC, created_at DESC
+  `) as LogEntryNoPhoto[];
+}
+
+export async function getLogPhoto(id: number): Promise<string | null> {
+  await initDb();
+  const rows = (await sql`
+    SELECT photo_path FROM logs WHERE id = ${id} LIMIT 1
+  `) as Array<{ photo_path: string | null }>;
+  return rows[0]?.photo_path ?? null;
+}
+
+export async function hasReminderBeenSent(date: string, tier: string): Promise<boolean> {
+  await initDb();
+  const rows = (await sql`
+    SELECT 1 FROM reminder_log WHERE date = ${date} AND tier = ${tier} LIMIT 1
+  `) as unknown[];
+  return rows.length > 0;
+}
+
+export async function recordReminderSent(date: string, tier: string): Promise<void> {
+  await initDb();
+  await sql`
+    INSERT INTO reminder_log (date, tier) VALUES (${date}, ${tier})
+  `;
 }
 
 export async function getLogsForDate(date: string): Promise<LogEntry[]> {

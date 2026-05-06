@@ -117,7 +117,8 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: parsed.error }, { status: parsed.status });
   }
 
-  const { medicationIds, date, photoPath } = parsed;
+  const { date, photoPath } = parsed;
+  const medicationIds = Array.from(new Set(parsed.medicationIds));
   if (medicationIds.length === 0) {
     return NextResponse.json({ error: 'medication_ids ontbreekt' }, { status: 400 });
   }
@@ -129,13 +130,14 @@ export async function POST(request: Request) {
 
   const time = timeHHMM();
   const logs: LogEntry[] = [];
-  for (const id of medicationIds) {
+  for (let i = 0; i < medicationIds.length; i++) {
+    const id = medicationIds[i];
     const log = await createLog({
       date,
       time_taken: time,
       medication_id: id,
       taken: 1,
-      photo_path: photoPath,
+      photo_path: i === 0 ? photoPath : null,
     });
     logs.push(log);
   }

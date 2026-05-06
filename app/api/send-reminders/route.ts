@@ -1,7 +1,9 @@
 import { NextResponse } from 'next/server';
-import { MEDICATIONS } from '@/lib/medications';
-import { getLogsForDate } from '@/lib/db';
+import { Buffer } from 'node:buffer';
+import { timingSafeEqual } from 'node:crypto';
+import { getLogsForDate, hasReminderBeenSent, recordReminderSent } from '@/lib/db';
 import { isOverdue, todayISO } from '@/lib/status';
+import { getMedicationsForDate } from '@/lib/schedule';
 import { sendReminderEmail, type ReminderTier } from '@/lib/email';
 import type { LogEntry, Medication } from '@/lib/types';
 
@@ -19,9 +21,11 @@ function dateOffset(d: Date, days: number): Date {
   return x;
 }
 
-async function dayHadAllRequiredTaken(date: string): Promise<boolean> {
+async function dayHadAllRequiredTaken(date: string, refDate: Date): Promise<boolean> {
+  const meds = await getMedicationsForDate(refDate);
+  const required = meds.filter((m) => m.required);
+  if (required.length === 0) return true;
   const taken = takenIds(await getLogsForDate(date));
-  const required = MEDICATIONS.filter((m) => m.required);
   return required.every((m) => taken.has(m.id));
 }
 
@@ -30,7 +34,7 @@ async function consecutiveMissedDays(today: Date): Promise<number> {
   for (let i = 1; i <= 14; i++) {
     const d = dateOffset(today, -i);
     const iso = todayISO(d);
-    if (await dayHadAllRequiredTaken(iso)) break;
+    if (await dayHadAllRequiredTaken(iso, d)) break;
     count++;
   }
   return count;
@@ -42,22 +46,34 @@ function pickTier(missedYesterdayDays: number): ReminderTier {
   return 'gentle';
 }
 
+function safeEqual(a: string, b: string): boolean {
+  const ab = Buffer.from(a, 'utf8');
+  const bb = Buffer.from(b, 'utf8');
+  if (ab.length !== bb.length) return false;
+  return timingSafeEqual(ab, bb);
+}
+
 export async function POST(request: Request) {
   const secret = process.env.REMINDER_CRON_SECRET;
-  if (secret) {
-    const auth = request.headers.get('authorization') ?? '';
-    const provided = auth.replace(/^Bearer\s+/i, '');
-    if (provided !== secret) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+  if (!secret) {
+    return NextResponse.json(
+      { error: 'REMINDER_CRON_SECRET niet ingesteld' },
+      { status: 401 },
+    );
+  }
+  const auth = request.headers.get('authorization') ?? '';
+  const provided = auth.replace(/^Bearer\s+/i, '');
+  if (!provided || !safeEqual(provided, secret)) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
   const now = new Date();
   const todayDate = todayISO(now);
+  const meds = await getMedicationsForDate(now);
   const todayLogs = await getLogsForDate(todayDate);
   const taken = takenIds(todayLogs);
 
-  const overdueToday: Medication[] = MEDICATIONS.filter(
+  const overdueToday: Medication[] = meds.filter(
     (m) => !taken.has(m.id) && isOverdue(m, now),
   );
 
@@ -68,12 +84,21 @@ export async function POST(request: Request) {
   const missedDays = await consecutiveMissedDays(now);
   const tier = pickTier(missedDays);
 
+  if (await hasReminderBeenSent(todayDate, tier)) {
+    return NextResponse.json({
+      sent: false,
+      reason: 'Reminder al verstuurd voor deze dag/tier',
+      tier,
+    });
+  }
+
   try {
     await sendReminderEmail({
       tier,
       missedToday: overdueToday,
       consecutiveMissedDays: missedDays + 1,
     });
+    await recordReminderSent(todayDate, tier);
   } catch (err) {
     return NextResponse.json(
       { error: err instanceof Error ? err.message : 'Mail verzenden mislukt' },
@@ -87,8 +112,4 @@ export async function POST(request: Request) {
     missed: overdueToday.map((m) => m.id),
     consecutiveMissedDays: missedDays,
   });
-}
-
-export async function GET(request: Request) {
-  return POST(request);
 }

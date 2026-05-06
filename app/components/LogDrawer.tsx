@@ -3,11 +3,12 @@
 import { useState } from 'react';
 
 export interface LogDrawerEntry {
+  log_id: number;
   medication_id: string;
   medication_name: string;
   time_taken: string | null;
   scheduled_time: string;
-  photo_url: string | null;
+  has_photo: boolean;
 }
 
 export interface LogDrawerDay {
@@ -26,6 +27,26 @@ export default function LogDrawer({ days }: Props) {
   const [open, setOpen] = useState(false);
   const [expandedDate, setExpandedDate] = useState<string | null>(null);
   const [photoUrl, setPhotoUrl] = useState<string | null>(null);
+  const [loadingId, setLoadingId] = useState<number | null>(null);
+  const [photoError, setPhotoError] = useState<string | null>(null);
+
+  async function openPhoto(logId: number) {
+    setPhotoError(null);
+    setLoadingId(logId);
+    try {
+      const res = await fetch(`/api/log/${logId}/photo`);
+      if (!res.ok) {
+        throw new Error('Foto kon niet geladen worden');
+      }
+      const body = (await res.json()) as { photo?: string };
+      if (!body.photo) throw new Error('Geen foto');
+      setPhotoUrl(body.photo);
+    } catch (err) {
+      setPhotoError(err instanceof Error ? err.message : 'Onbekende fout');
+    } finally {
+      setLoadingId(null);
+    }
+  }
 
   return (
     <>
@@ -90,25 +111,9 @@ export default function LogDrawer({ days }: Props) {
                               key={`${entry.medication_id}-${i}`}
                               className="flex items-center gap-3 bg-slate-50 rounded-xl p-2"
                             >
-                              {entry.photo_url ? (
-                                <button
-                                  type="button"
-                                  onClick={() => setPhotoUrl(entry.photo_url)}
-                                  className="shrink-0 w-12 h-12 rounded-lg overflow-hidden border border-slate-200 bg-slate-100"
-                                  aria-label={`Foto van ${entry.medication_name}`}
-                                >
-                                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                                  <img
-                                    src={entry.photo_url}
-                                    alt=""
-                                    className="w-full h-full object-cover"
-                                  />
-                                </button>
-                              ) : (
-                                <div className="shrink-0 w-12 h-12 rounded-lg bg-slate-200 flex items-center justify-center text-slate-400 text-xl">
-                                  💊
-                                </div>
-                              )}
+                              <div className="shrink-0 w-12 h-12 rounded-lg bg-slate-200 flex items-center justify-center text-slate-400 text-xl">
+                                💊
+                              </div>
                               <div className="flex-1 min-w-0">
                                 <p className="font-medium text-slate-800 truncate">
                                   {entry.medication_name}
@@ -118,6 +123,18 @@ export default function LogDrawer({ days }: Props) {
                                     ? `Genomen om ${entry.time_taken}`
                                     : `Gepland ${entry.scheduled_time}`}
                                 </p>
+                                {entry.has_photo && (
+                                  <button
+                                    type="button"
+                                    onClick={() => openPhoto(entry.log_id)}
+                                    disabled={loadingId === entry.log_id}
+                                    className="text-xs mt-1 text-luna-accent hover:underline disabled:opacity-50"
+                                  >
+                                    {loadingId === entry.log_id
+                                      ? 'Laden…'
+                                      : '📷 Foto bekijken'}
+                                  </button>
+                                )}
                               </div>
                               <span className="text-green-600 text-xl">✓</span>
                             </li>
@@ -128,6 +145,9 @@ export default function LogDrawer({ days }: Props) {
                   );
                 })}
               </ul>
+            )}
+            {photoError && (
+              <p className="text-xs text-red-600 px-2 pt-2">{photoError}</p>
             )}
           </div>
         )}
