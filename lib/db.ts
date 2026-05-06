@@ -64,6 +64,28 @@ export function initDb(): Promise<void> {
       )
     `;
     await sql`CREATE INDEX IF NOT EXISTS idx_reminder_log_date ON reminder_log(date)`;
+    await sql`
+      CREATE TABLE IF NOT EXISTS push_subscriptions (
+        id SERIAL PRIMARY KEY,
+        endpoint TEXT UNIQUE NOT NULL,
+        p256dh TEXT NOT NULL,
+        auth TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT NOW()
+      )
+    `;
+    await sql`
+      CREATE TABLE IF NOT EXISTS push_log (
+        id SERIAL PRIMARY KEY,
+        date TEXT NOT NULL,
+        bracket TEXT NOT NULL,
+        trigger_type TEXT NOT NULL,
+        sent_at TIMESTAMP DEFAULT NOW()
+      )
+    `;
+    await sql`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_push_log_unique
+        ON push_log(date, bracket, trigger_type)
+    `;
   })().catch((err) => {
     _initPromise = null;
     throw err;
@@ -231,4 +253,68 @@ export async function replaceCustomSchedule(entries: ScheduleEntryInput[]): Prom
     ),
   ];
   await sql.transaction(queries);
+}
+
+export interface PushSubscriptionRow {
+  id: number;
+  endpoint: string;
+  p256dh: string;
+  auth: string;
+  created_at: string;
+}
+
+export async function upsertPushSubscription(input: {
+  endpoint: string;
+  p256dh: string;
+  auth: string;
+}): Promise<void> {
+  await initDb();
+  await sql`
+    INSERT INTO push_subscriptions (endpoint, p256dh, auth)
+    VALUES (${input.endpoint}, ${input.p256dh}, ${input.auth})
+    ON CONFLICT (endpoint) DO UPDATE SET
+      p256dh = EXCLUDED.p256dh,
+      auth = EXCLUDED.auth
+  `;
+}
+
+export async function deletePushSubscription(endpoint: string): Promise<void> {
+  await initDb();
+  await sql`DELETE FROM push_subscriptions WHERE endpoint = ${endpoint}`;
+}
+
+export async function getAllPushSubscriptions(): Promise<PushSubscriptionRow[]> {
+  await initDb();
+  return (await sql`
+    SELECT id, endpoint, p256dh, auth, created_at FROM push_subscriptions
+  `) as PushSubscriptionRow[];
+}
+
+export async function hasPushBeenSent(
+  date: string,
+  bracket: string,
+  triggerType: string,
+): Promise<boolean> {
+  await initDb();
+  const rows = (await sql`
+    SELECT 1 FROM push_log
+    WHERE date = ${date} AND bracket = ${bracket} AND trigger_type = ${triggerType}
+    LIMIT 1
+  `) as unknown[];
+  return rows.length > 0;
+}
+
+export async function recordPushSent(
+  date: string,
+  bracket: string,
+  triggerType: string,
+): Promise<boolean> {
+  await initDb();
+  const rows = (await sql`
+    INSERT INTO push_log (date, bracket, trigger_type)
+    VALUES (${date}, ${bracket}, ${triggerType})
+    ON CONFLICT (date, bracket, trigger_type) DO NOTHING
+    RETURNING id
+  `) as unknown[];
+  return rows.length > 0;
 }

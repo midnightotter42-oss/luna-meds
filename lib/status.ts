@@ -3,6 +3,10 @@ import type { LogEntry, Medication, MedicationStatus, MedicationWithStatus } fro
 const GRACE_MINUTES = 30;
 export const TZ = 'Europe/Amsterdam';
 
+export function isEssential(med: Medication): boolean {
+  return med.type === 'medicatie';
+}
+
 export interface AmsterdamParts {
   year: number;
   month: number;

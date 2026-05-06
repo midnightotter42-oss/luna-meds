@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { MEDICATIONS } from '@/lib/medications';
 import { getFullWeekSchedule } from '@/lib/schedule';
 import ScheduleEditor from '../components/ScheduleEditor';
+import PushToggle from '../components/PushToggle';
 
 export const dynamic = 'force-dynamic';
 
@@ -15,6 +16,7 @@ export default async function SettingsPage() {
     defaultTime: m.time,
     defaultNotes: m.notes ?? null,
   }));
+  const vapidPublicKey = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY ?? null;
 
   return (
     <div className="min-h-screen flex flex-col pb-32">
@@ -31,6 +33,8 @@ export default async function SettingsPage() {
       </header>
 
       <div className="flex-1 w-full max-w-md mx-auto px-5">
+        <PushToggle vapidPublicKey={vapidPublicKey} />
+
         <div className="bg-white/15 backdrop-blur rounded-2xl p-4 mb-5 text-white text-sm border border-white/20">
           Stel per dag van de week in welke medicijnen Luna inneemt en op welk tijdstip.
           {!schedule.hasCustom && (

@@ -1,10 +1,11 @@
 import Link from 'next/link';
 import { getLogsForDate, getLogsForDateRangeWithoutPhotos, type LogEntryNoPhoto } from '@/lib/db';
-import { amsterdamParts, attachStatus, todayISO } from '@/lib/status';
+import { amsterdamParts, attachStatus, isEssential, todayISO } from '@/lib/status';
 import { getMedicationsForDate } from '@/lib/schedule';
 import { SLOT_ORDER, groupBySlot } from '@/lib/medications';
 import type { MedicationWithStatus, Slot } from '@/lib/types';
-import SlotBlock, { type SlotVariant } from './components/SlotBlock';
+import TodayBoard from './components/TodayBoard';
+import type { CarryOverItem } from './components/SlotBlock';
 import LogDrawer, { type LogDrawerDay, type LogDrawerEntry } from './components/LogDrawer';
 
 export const dynamic = 'force-dynamic';
@@ -88,18 +89,11 @@ async function buildLogDays(today: Date): Promise<LogDrawerDay[]> {
   });
 }
 
-function variantForSlot(
-  slot: Slot,
-  activeSlot: Slot,
-  meds: MedicationWithStatus[],
-): SlotVariant {
-  if (slot === activeSlot) return 'active';
+function positionForSlot(slot: Slot, activeSlot: Slot): 'past' | 'current' | 'future' {
   const slotIdx = SLOT_ORDER.indexOf(slot);
   const activeIdx = SLOT_ORDER.indexOf(activeSlot);
-  if (slotIdx < activeIdx) {
-    const allTaken = meds.every((m) => m.status === 'taken');
-    return allTaken ? 'past-complete' : 'past-incomplete';
-  }
+  if (slotIdx < activeIdx) return 'past';
+  if (slotIdx === activeIdx) return 'current';
   return 'future';
 }
 
@@ -113,16 +107,27 @@ export default async function HomePage() {
   ]);
   const withStatus = attachStatus(meds, logs, now);
 
-  const totalRequired = withStatus.filter((m) => m.required).length;
-  const takenRequired = withStatus.filter((m) => m.required && m.status === 'taken').length;
+  const totalEssential = withStatus.filter(isEssential).length;
+  const takenEssential = withStatus.filter((m) => isEssential(m) && m.status === 'taken').length;
 
   const activeSlot = currentSlot(now);
   const groups = groupBySlot(withStatus);
 
-  const orderedSlots: Slot[] = [
-    activeSlot,
-    ...SLOT_ORDER.filter((s) => s !== activeSlot),
-  ];
+  const buckets = SLOT_ORDER.map((slot) => ({
+    slot,
+    meds: groups[slot],
+    position: positionForSlot(slot, activeSlot),
+  })).filter((b) => b.position !== 'future');
+
+  const carryOver: CarryOverItem[] = [];
+  for (const b of buckets) {
+    if (b.position !== 'past') continue;
+    for (const m of b.meds) {
+      if (m.status !== 'taken' && isEssential(m)) {
+        carryOver.push({ medicationId: m.id, name: m.name, fromSlot: b.slot });
+      }
+    }
+  }
 
   const noScheduleAtAll = withStatus.length === 0;
   const allDoneForDay = !noScheduleAtAll && withStatus.every((m) => m.status === 'taken');
@@ -160,37 +165,24 @@ export default async function HomePage() {
                   <p className="text-slate-600 mt-1">Goed bezig 💖</p>
                 </div>
               )}
-              {orderedSlots.map((slot) => {
-                const slotMeds = groups[slot];
-                if (slotMeds.length === 0) return null;
-                const variant = variantForSlot(slot, activeSlot, slotMeds);
-                return (
-                  <SlotBlock
-                    key={slot}
-                    slot={slot}
-                    meds={slotMeds}
-                    date={date}
-                    variant={variant}
-                  />
-                );
-              })}
+              <TodayBoard date={date} buckets={buckets} carryOver={carryOver} />
             </>
           )}
 
-          {totalRequired > 0 && (
+          {totalEssential > 0 && (
             <div className="bg-white/15 backdrop-blur rounded-2xl px-5 py-3 border border-white/20">
               <div className="flex items-center justify-between text-white">
-                <span className="text-sm">Vandaag</span>
+                <span className="text-sm">Essentiële medicatie</span>
                 <span className="text-sm font-semibold">
-                  {takenRequired}/{totalRequired} verplicht
+                  {takenEssential}/{totalEssential}
                 </span>
               </div>
               <div className="mt-2 h-2 bg-white/20 rounded-full overflow-hidden">
                 <div
                   className="h-full bg-white transition-all"
                   style={{
-                    width: totalRequired
-                      ? `${(takenRequired / totalRequired) * 100}%`
+                    width: totalEssential
+                      ? `${(takenEssential / totalEssential) * 100}%`
                       : '0%',
                   }}
                 />

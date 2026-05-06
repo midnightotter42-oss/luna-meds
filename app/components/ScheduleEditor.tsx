@@ -7,7 +7,7 @@ import type { WeekSchedule } from '@/lib/schedule';
 interface MedCatalogItem {
   id: string;
   name: string;
-  type: string;
+  type: 'medicatie' | 'supplement';
   required: boolean;
   defaultTime: string;
   defaultNotes: string | null;
@@ -18,6 +18,8 @@ interface Entry {
   time: string;
   notes: string | null;
 }
+
+type AddKind = 'medicatie' | 'supplement';
 
 interface DayState {
   day_of_week: number;
@@ -73,13 +75,17 @@ export default function ScheduleEditor({ initialSchedule, catalog }: Props) {
     updateDay(dow, (d) => ({ ...d, enabled: !d.enabled }));
   }
 
-  function addEntry(dow: number) {
+  function addEntry(dow: number, kind: AddKind) {
     const day = days.find((d) => d.day_of_week === dow);
     if (!day) return;
     const usedIds = new Set(day.entries.map((e) => e.medication_id));
-    const next = catalog.find((c) => !usedIds.has(c.id));
+    const next = catalog.find((c) => c.type === kind && !usedIds.has(c.id));
     if (!next) {
-      setError('Alle medicijnen zijn al toegevoegd voor deze dag.');
+      setError(
+        kind === 'medicatie'
+          ? 'Alle medicijnen zijn al toegevoegd voor deze dag.'
+          : 'Alle supplementen zijn al toegevoegd voor deze dag.',
+      );
       return;
     }
     setError(null);
@@ -219,67 +225,107 @@ export default function ScheduleEditor({ initialSchedule, catalog }: Props) {
             </div>
 
             {isOpen && day.enabled && (
-              <div className="px-4 pb-4 space-y-2 border-t border-slate-100 pt-3 animate-slide-up">
-                {day.entries.length === 0 && (
-                  <p className="text-sm text-slate-500 italic">
-                    Nog geen medicijnen — klik &laquo;Toevoegen&raquo;.
-                  </p>
-                )}
-                {day.entries.map((entry, idx) => {
-                  const cat = catalogById.get(entry.medication_id);
+              <div className="px-4 pb-4 space-y-4 border-t border-slate-100 pt-3 animate-slide-up">
+                {(['medicatie', 'supplement'] as AddKind[]).map((kind) => {
+                  const sectionEntries = day.entries
+                    .map((e, idx) => ({ e, idx, cat: catalogById.get(e.medication_id) }))
+                    .filter(({ cat }) => cat && cat.type === kind);
+                  const sectionCatalog = catalog.filter((c) => c.type === kind);
+                  const heading =
+                    kind === 'medicatie' ? 'Medicatie (essentieel)' : 'Supplementen';
+                  const addLabel =
+                    kind === 'medicatie' ? '+ Medicijn toevoegen' : '+ Supplement toevoegen';
+                  const accent =
+                    kind === 'medicatie'
+                      ? 'bg-rose-50 hover:bg-rose-100 text-rose-700'
+                      : 'bg-blue-50 hover:bg-blue-100 text-blue-700';
+
                   return (
-                    <div
-                      key={idx}
-                      className="bg-slate-50 rounded-xl p-3 flex items-center gap-2"
-                    >
-                      <select
-                        value={entry.medication_id}
-                        onChange={(e) => {
-                          const newId = e.target.value;
-                          const newCat = catalogById.get(newId);
-                          changeEntry(day.day_of_week, idx, (cur) => ({
-                            ...cur,
-                            medication_id: newId,
-                            notes: newCat?.defaultNotes ?? cur.notes,
-                          }));
-                        }}
-                        className="flex-1 min-w-0 bg-white border border-slate-200 rounded-lg px-2 py-2 text-slate-800 text-sm"
-                      >
-                        {catalog.map((c) => (
-                          <option key={c.id} value={c.id}>
-                            {c.name}
-                          </option>
-                        ))}
-                      </select>
-                      <input
-                        type="time"
-                        value={entry.time}
-                        onChange={(e) =>
-                          changeEntry(day.day_of_week, idx, (cur) => ({
-                            ...cur,
-                            time: e.target.value,
-                          }))
-                        }
-                        className="bg-white border border-slate-200 rounded-lg px-2 py-2 text-slate-800 text-sm"
-                      />
+                    <div key={kind} className="space-y-2">
+                      <div className="flex items-center justify-between">
+                        <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500">
+                          {heading}
+                        </h3>
+                        <span className="text-xs text-slate-400">
+                          {sectionEntries.length}/{sectionCatalog.length}
+                        </span>
+                      </div>
+                      {sectionEntries.length === 0 && (
+                        <p className="text-sm text-slate-400 italic">
+                          {kind === 'medicatie'
+                            ? 'Nog geen essentiële medicatie ingepland.'
+                            : 'Nog geen supplementen ingepland.'}
+                        </p>
+                      )}
+                      {sectionEntries.map(({ e: entry, idx, cat }) => {
+                        const badgeClass =
+                          kind === 'medicatie'
+                            ? 'bg-rose-100 text-rose-700'
+                            : 'bg-blue-100 text-blue-700';
+                        const badgeLabel = kind === 'medicatie' ? 'essentieel' : 'supplement';
+                        return (
+                          <div
+                            key={idx}
+                            className="bg-slate-50 rounded-xl p-3 flex items-center gap-2"
+                          >
+                            <div className="flex-1 min-w-0 flex flex-col gap-1">
+                              <select
+                                value={entry.medication_id}
+                                onChange={(e) => {
+                                  const newId = e.target.value;
+                                  const newCat = catalogById.get(newId);
+                                  changeEntry(day.day_of_week, idx, (cur) => ({
+                                    ...cur,
+                                    medication_id: newId,
+                                    notes: newCat?.defaultNotes ?? cur.notes,
+                                  }));
+                                }}
+                                className="w-full bg-white border border-slate-200 rounded-lg px-2 py-2 text-slate-800 text-sm"
+                              >
+                                {sectionCatalog.map((c) => (
+                                  <option key={c.id} value={c.id}>
+                                    {c.name}
+                                  </option>
+                                ))}
+                              </select>
+                              <span
+                                className={`text-[10px] font-semibold px-2 py-0.5 rounded-full self-start ${badgeClass}`}
+                              >
+                                {badgeLabel}
+                              </span>
+                            </div>
+                            <input
+                              type="time"
+                              value={entry.time}
+                              onChange={(e) =>
+                                changeEntry(day.day_of_week, idx, (cur) => ({
+                                  ...cur,
+                                  time: e.target.value,
+                                }))
+                              }
+                              className="bg-white border border-slate-200 rounded-lg px-2 py-2 text-slate-800 text-sm"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => removeEntry(day.day_of_week, idx)}
+                              aria-label={`Verwijder ${cat?.name ?? entry.medication_id}`}
+                              className="w-9 h-9 shrink-0 rounded-lg bg-red-50 text-red-500 hover:bg-red-100 flex items-center justify-center"
+                            >
+                              ✕
+                            </button>
+                          </div>
+                        );
+                      })}
                       <button
                         type="button"
-                        onClick={() => removeEntry(day.day_of_week, idx)}
-                        aria-label={`Verwijder ${cat?.name ?? entry.medication_id}`}
-                        className="w-9 h-9 shrink-0 rounded-lg bg-red-50 text-red-500 hover:bg-red-100 flex items-center justify-center"
+                        onClick={() => addEntry(day.day_of_week, kind)}
+                        className={`w-full font-semibold py-2 rounded-xl text-sm ${accent}`}
                       >
-                        ✕
+                        {addLabel}
                       </button>
                     </div>
                   );
                 })}
-                <button
-                  type="button"
-                  onClick={() => addEntry(day.day_of_week)}
-                  className="w-full bg-blue-50 hover:bg-blue-100 text-blue-600 font-semibold py-2 rounded-xl text-sm"
-                >
-                  + Medicijn toevoegen
-                </button>
               </div>
             )}
 

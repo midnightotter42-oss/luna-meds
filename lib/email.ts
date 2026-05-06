@@ -17,7 +17,7 @@ function getTransporter() {
   return _transporter;
 }
 
-export type ReminderTier = 'gentle' | 'serious' | 'urgent';
+export type ReminderTier = 'gentle' | 'serious';
 
 export interface ReminderContext {
   tier: ReminderTier;
@@ -28,10 +28,8 @@ export interface ReminderContext {
 function renderSubject(tier: ReminderTier): string {
   switch (tier) {
     case 'gentle':
-      return '💊 Vriendelijk reminder van Luna app';
+      return '💛 Hoi Luna, je hebt twee dagen je medicatie gemist';
     case 'serious':
-      return '💛 Hoi Luna, je hebt je medicatie gemist';
-    case 'urgent':
       return '❤️ Luna, neem alsjeblieft je medicatie';
   }
 }
@@ -43,19 +41,6 @@ function renderBody(ctx: ReminderContext): string {
 
   switch (ctx.tier) {
     case 'gentle':
-      return `Hoi lieverd 🌷
-
-Een klein duwtje van Luna app: het lijkt erop dat je vandaag nog niet alles hebt genomen.
-
-Nog te doen:
-${list}
-
-Geen stress, je kunt het nog steeds nemen — maak even een fotootje in de app als je het hebt gedaan ✨
-
-Liefs,
-Luna app 💙`;
-
-    case 'serious':
       return `Hoi Luna,
 
 Je hebt nu twee dagen op rij medicatie gemist. Dat kan invloed hebben op je hormonen en hoe je je voelt.
@@ -69,7 +54,7 @@ Lukt het niet? Stel een wekker, of vraag iemand om je te helpen herinneren.
 
 Luna app 💙`;
 
-    case 'urgent':
+    case 'serious':
       return `Lieve Luna,
 
 Dit is een dringende reminder. Je hebt ${ctx.consecutiveMissedDays} dagen op rij medicatie gemist.

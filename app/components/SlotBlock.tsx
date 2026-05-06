@@ -1,11 +1,9 @@
 'use client';
 
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import type { MedicationWithStatus, Slot } from '@/lib/types';
 import { SLOT_EMOJI, SLOT_LABEL } from '@/lib/medications';
-
-export type SlotVariant = 'active' | 'past-complete' | 'past-incomplete' | 'future';
 
 function playCheckSound() {
   try {
@@ -45,6 +43,7 @@ interface MedRowProps {
 function MedRow({ med, emphasize, flash }: MedRowProps) {
   const taken = med.status === 'taken';
   const missed = !taken && med.status === 'missed';
+  const essential = med.type === 'medicatie';
 
   const rowBg = taken
     ? 'bg-green-50 border-green-200'
@@ -59,14 +58,18 @@ function MedRow({ med, emphasize, flash }: MedRowProps) {
           <div className="flex items-center gap-2 flex-wrap">
             <h3 className="font-semibold text-slate-800 leading-tight">{med.name}</h3>
             <span className="text-sm font-medium text-slate-500">{med.time}</span>
+            {essential ? (
+              <span className="text-[10px] px-2 py-0.5 rounded-full bg-rose-100 text-rose-700 font-semibold uppercase tracking-wide">
+                essentieel
+              </span>
+            ) : (
+              <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 font-semibold uppercase tracking-wide">
+                supplement
+              </span>
+            )}
             {missed && (
               <span className="text-xs px-2 py-0.5 rounded-full bg-red-100 text-red-600 font-semibold">
                 Te laat
-              </span>
-            )}
-            {med.required && !taken && (
-              <span className="text-xs px-2 py-0.5 rounded-full bg-blue-50 text-blue-600 font-medium">
-                verplicht
               </span>
             )}
           </div>
@@ -89,25 +92,53 @@ function MedRow({ med, emphasize, flash }: MedRowProps) {
   );
 }
 
+export interface CarryOverItem {
+  medicationId: string;
+  name: string;
+  fromSlot: Slot;
+}
+
 interface SlotBlockProps {
   slot: Slot;
   meds: MedicationWithStatus[];
   date: string;
-  variant: SlotVariant;
+  isCurrentSlot: boolean;
+  expandRequestKey?: number;
 }
 
-export default function SlotBlock({ slot, meds, date, variant }: SlotBlockProps) {
+export default function SlotBlock({
+  slot,
+  meds,
+  date,
+  isCurrentSlot,
+  expandRequestKey,
+}: SlotBlockProps) {
   const router = useRouter();
   const inputRef = useRef<HTMLInputElement>(null);
   const [submitting, setSubmitting] = useState(false);
   const [justTaken, setJustTaken] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState<boolean>(isCurrentSlot);
+  const sectionRef = useRef<HTMLElement | null>(null);
 
-  const isActive = variant === 'active';
+  useEffect(() => {
+    if (isCurrentSlot) return;
+    if (expandRequestKey === undefined) return;
+    setExpanded(true);
+    sectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, [expandRequestKey, isCurrentSlot]);
+
   const taken = meds.filter((m) => m.status === 'taken').length;
   const total = meds.length;
   const allTaken = total > 0 && taken === total;
   const pendingIds = meds.filter((m) => m.status !== 'taken').map((m) => m.id);
+
+  const missedEssentials = meds.filter(
+    (m) => m.status !== 'taken' && m.type === 'medicatie',
+  );
+  const missedSupplements = meds.filter(
+    (m) => m.status !== 'taken' && m.type === 'supplement',
+  );
 
   async function submitTaken(file?: File) {
     if (pendingIds.length === 0 || submitting) return;
@@ -141,33 +172,102 @@ export default function SlotBlock({ slot, meds, date, variant }: SlotBlockProps)
     await submitTaken(file);
   }
 
-  const containerClass =
-    variant === 'active'
-      ? 'bg-white/95 backdrop-blur shadow-xl ring-2 ring-white/60 animate-slide-up'
-      : variant === 'past-complete' || allTaken
-      ? 'bg-green-100/85 backdrop-blur shadow-md'
-      : variant === 'past-incomplete'
-      ? 'bg-slate-200/75 backdrop-blur shadow-md'
-      : 'bg-white/40 backdrop-blur shadow-md';
+  // Compact past-slot summary (collapsed)
+  if (!isCurrentSlot && !expanded) {
+    let bg: string;
+    let icon: string;
+    let title: string;
+    let subtitle: string | null = null;
 
-  const labelTextClass = isActive ? 'text-slate-800' : 'text-slate-700';
+    if (allTaken) {
+      bg = 'bg-green-100/85 text-green-800 border border-green-200';
+      icon = '✓';
+      title = `${SLOT_LABEL[slot]} compleet`;
+    } else if (missedEssentials.length > 0) {
+      bg = 'bg-amber-100/90 text-amber-900 border border-amber-300';
+      icon = '⚠️';
+      const names = missedEssentials.map((m) => m.name).join(', ');
+      title = `${SLOT_LABEL[slot]} — ${names} niet genomen`;
+      subtitle = 'Overleg met je arts of je dit vandaag nog kunt nemen.';
+    } else if (missedSupplements.length > 0) {
+      bg = 'bg-orange-100/85 text-orange-900 border border-orange-200';
+      icon = '○';
+      const count = missedSupplements.length;
+      title = `${SLOT_LABEL[slot]} — ${count} supplement${count === 1 ? '' : 'en'} gemist`;
+    } else {
+      bg = 'bg-white/40 text-slate-700 border border-white/40';
+      icon = '·';
+      title = SLOT_LABEL[slot];
+    }
+
+    return (
+      <button
+        ref={(el) => {
+          sectionRef.current = el;
+        }}
+        type="button"
+        onClick={() => setExpanded(true)}
+        className={`w-full text-left rounded-2xl px-4 py-3 backdrop-blur shadow-sm transition-all hover:shadow-md ${bg}`}
+      >
+        <div className="flex items-center gap-3">
+          <span className="text-lg shrink-0" aria-hidden>
+            {icon}
+          </span>
+          <div className="flex-1 min-w-0">
+            <p className="font-semibold text-sm leading-tight">{title}</p>
+            {subtitle && <p className="text-xs mt-0.5 opacity-80">{subtitle}</p>}
+          </div>
+          <span className="text-xs font-semibold opacity-70 shrink-0">
+            {taken}/{total}
+          </span>
+          <span className="text-slate-500 shrink-0" aria-hidden>
+            ▾
+          </span>
+        </div>
+      </button>
+    );
+  }
+
+  // Expanded view (active or past-expanded)
+  const containerClass = isCurrentSlot
+    ? 'bg-white/95 backdrop-blur shadow-xl ring-2 ring-white/60 animate-slide-up'
+    : allTaken
+    ? 'bg-green-100/85 backdrop-blur shadow-md animate-slide-up'
+    : missedEssentials.length > 0
+    ? 'bg-amber-50/95 backdrop-blur shadow-md animate-slide-up'
+    : 'bg-white/85 backdrop-blur shadow-md animate-slide-up';
+
+  const labelTextClass = 'text-slate-800';
   const counterClass = allTaken
     ? 'text-green-700'
-    : variant === 'past-complete'
-    ? 'text-green-700'
-    : variant === 'active'
+    : isCurrentSlot
     ? 'text-blue-600'
     : 'text-slate-600';
 
   return (
-    <div className={`rounded-3xl p-5 w-full ${containerClass}`}>
+    <div
+      ref={(el) => {
+        sectionRef.current = el;
+      }}
+      className={`rounded-3xl p-5 w-full ${containerClass}`}
+    >
+      {!isCurrentSlot && (
+        <button
+          type="button"
+          onClick={() => setExpanded(false)}
+          className="text-xs text-slate-500 hover:text-slate-700 mb-2"
+        >
+          ▴ inklappen
+        </button>
+      )}
+
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-2">
           <span className="text-2xl" aria-hidden>
             {SLOT_EMOJI[slot]}
           </span>
           <h2 className={`text-xl font-bold ${labelTextClass}`}>{SLOT_LABEL[slot]}</h2>
-          {isActive && !allTaken && (
+          {isCurrentSlot && !allTaken && (
             <span className="text-xs uppercase tracking-wider font-semibold text-blue-500 ml-1">
               nu
             </span>
@@ -180,7 +280,12 @@ export default function SlotBlock({ slot, meds, date, variant }: SlotBlockProps)
 
       <div className="space-y-2">
         {meds.map((m) => (
-          <MedRow key={m.id} med={m} emphasize={isActive} flash={justTaken && m.status !== 'taken'} />
+          <MedRow
+            key={m.id}
+            med={m}
+            emphasize={isCurrentSlot}
+            flash={justTaken && m.status !== 'taken'}
+          />
         ))}
       </div>
 
