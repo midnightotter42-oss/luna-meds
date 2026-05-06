@@ -1,6 +1,11 @@
 import { MEDICATIONS, getMedicationById, prettifyMedicationId, slotForTime } from './medications';
-import { getAllCustomSchedule, type ScheduleRow } from './db';
-import { amsterdamParts } from './status';
+import {
+  getAllCustomSchedule,
+  getCompensationDay,
+  getWeeklyCountForMed,
+  type ScheduleRow,
+} from './db';
+import { amsterdamParts, todayISO } from './status';
 import type { Medication, MedicationType } from './types';
 
 export { slotForTime };
@@ -16,6 +21,12 @@ export function dayOfWeekForDate(date: Date): number {
   return jsDayToMonFirst(amsterdamParts(date).weekday);
 }
 
+// Hardcoded — bewust: antidepressiva detectie op id-naam
+export function isAntidepressivaId(id: string): boolean {
+  const lower = id.toLowerCase();
+  return lower.includes('antidepressiva') || lower.includes('antidepressant');
+}
+
 function isMedicationType(v: unknown): v is MedicationType {
   return v === 'medicatie' || v === 'supplement';
 }
@@ -25,6 +36,7 @@ function rowToMedication(row: ScheduleRow): Medication {
   const type: MedicationType = isMedicationType(row.type)
     ? row.type
     : base?.type ?? 'supplement';
+  const weeklyMin = row.weekly_min ?? undefined;
   if (base) {
     return {
       ...base,
@@ -32,6 +44,7 @@ function rowToMedication(row: ScheduleRow): Medication {
       slot: slotForTime(row.time),
       notes: row.notes ?? base.notes,
       type,
+      weeklyMin: weeklyMin ?? undefined,
     };
   }
   return {
@@ -42,23 +55,76 @@ function rowToMedication(row: ScheduleRow): Medication {
     notes: row.notes ?? undefined,
     type,
     required: type === 'medicatie',
+    weeklyMin: weeklyMin ?? undefined,
   };
+}
+
+function mondayOfWeek(date: Date): string {
+  const dow = dayOfWeekForDate(date);
+  const monday = new Date(date);
+  monday.setDate(date.getDate() - dow);
+  return todayISO(monday);
+}
+
+function buildCompensationMeds(base: Medication): Medication[] {
+  const slots: Array<{ id: string; slot: 'ochtend' | 'middag' | 'avond'; time: string }> = [
+    { id: `${base.id}-ochtend`, slot: 'ochtend', time: '08:00' },
+    { id: `${base.id}-middag`, slot: 'middag', time: '13:00' },
+    { id: `${base.id}-avond`, slot: 'avond', time: '21:00' },
+  ];
+  return slots.map((s) => ({
+    ...base,
+    id: s.id,
+    name: 'Antidepressivum (1×)',
+    slot: s.slot,
+    time: s.time,
+    notes: 'Compensatiedag — verspreid over 3 momenten',
+    count: 1,
+  }));
 }
 
 export async function getMedicationsForDate(date: Date): Promise<Medication[]> {
   const all = await getAllCustomSchedule();
-  if (all.length === 0) {
-    return [...MEDICATIONS].sort((a, b) => a.time.localeCompare(b.time));
-  }
   const dow = dayOfWeekForDate(date);
-  const meds: Medication[] = [];
-  for (const row of all) {
-    if (row.day_of_week !== dow) continue;
-    if (row.enabled !== 1) continue;
-    meds.push(rowToMedication(row));
+  let meds: Medication[];
+
+  if (all.length === 0) {
+    meds = [...MEDICATIONS];
+  } else {
+    meds = [];
+    for (const row of all) {
+      if (row.day_of_week !== dow) continue;
+      if (row.enabled !== 1) continue;
+      meds.push(rowToMedication(row));
+    }
   }
-  meds.sort((a, b) => a.time.localeCompare(b.time));
-  return meds;
+
+  const isoDate = todayISO(date);
+  const isCompensationDay = await getCompensationDay(isoDate);
+
+  if (isCompensationDay) {
+    const antiBase = meds.find((m) => isAntidepressivaId(m.id));
+    if (antiBase) {
+      meds = meds.filter((m) => !isAntidepressivaId(m.id));
+      meds.push(...buildCompensationMeds(antiBase));
+    }
+  }
+
+  // Weekly minimum: enrich elke med met weeklyMin met een count
+  const weekStart = mondayOfWeek(date);
+  const weekEnd = isoDate;
+  const enriched: Medication[] = [];
+  for (const m of meds) {
+    if (m.weeklyMin && m.weeklyMin > 0) {
+      const weeklyCount = await getWeeklyCountForMed(m.id, weekStart, weekEnd);
+      enriched.push({ ...m, weeklyCount });
+    } else {
+      enriched.push(m);
+    }
+  }
+
+  enriched.sort((a, b) => a.time.localeCompare(b.time));
+  return enriched;
 }
 
 export interface WeekSchedule {
@@ -73,6 +139,7 @@ export interface WeekSchedule {
       enabled: boolean;
       notes: string | null;
       type: MedicationType;
+      weekly_min: number | null;
     }>;
   }>;
 }
@@ -96,6 +163,7 @@ export async function getFullWeekSchedule(): Promise<WeekSchedule> {
             enabled: r.enabled === 1,
             notes: r.notes,
             type: med.type,
+            weekly_min: r.weekly_min,
           };
         })
         .sort((a, b) => a.time.localeCompare(b.time));
@@ -107,6 +175,7 @@ export async function getFullWeekSchedule(): Promise<WeekSchedule> {
         enabled: true,
         notes: m.notes ?? null,
         type: m.type,
+        weekly_min: null,
       })).sort((a, b) => a.time.localeCompare(b.time));
     }
     days.push({ day_of_week: dow, name: WEEKDAY_NAMES[dow], entries });

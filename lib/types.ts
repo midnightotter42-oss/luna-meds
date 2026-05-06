@@ -9,6 +9,9 @@ export interface Medication {
   notes?: string;
   type: MedicationType;
   required: boolean;
+  weeklyMin?: number;
+  weeklyCount?: number;
+  count?: number;
 }
 
 export interface LogEntry {

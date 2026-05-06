@@ -1,6 +1,7 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import type { MedicationWithStatus, Slot } from '@/lib/types';
 import { SLOT_ORDER, SLOT_LABEL } from '@/lib/medications';
 import SlotBlock, { type CarryOverItem } from './SlotBlock';
@@ -15,6 +16,8 @@ interface Props {
   date: string;
   buckets: SlotBucket[];
   carryOver: CarryOverItem[];
+  showCompensationBanner?: boolean;
+  isCompensationDay?: boolean;
 }
 
 const SLOT_PAST_LABEL: Record<Slot, string> = {
@@ -23,16 +26,55 @@ const SLOT_PAST_LABEL: Record<Slot, string> = {
   avond: 'vanavond',
 };
 
-export default function TodayBoard({ date, buckets, carryOver }: Props) {
+export default function TodayBoard({
+  date,
+  buckets,
+  carryOver,
+  showCompensationBanner = false,
+  isCompensationDay = false,
+}: Props) {
+  const router = useRouter();
   const [expandTriggers, setExpandTriggers] = useState<Record<Slot, number>>({
     ochtend: 0,
     middag: 0,
     avond: 0,
   });
+  const dismissKey = `compensation_dismissed_${date}`;
+  const [dismissed, setDismissed] = useState(false);
+  const [applying, setApplying] = useState(false);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (window.localStorage.getItem(dismissKey)) setDismissed(true);
+  }, [dismissKey]);
 
   function expandPastSlot(slot: Slot) {
     setExpandTriggers((prev) => ({ ...prev, [slot]: prev[slot] + 1 }));
   }
+
+  async function applyCompensation() {
+    if (applying) return;
+    setApplying(true);
+    try {
+      const res = await fetch('/api/compensation-day', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ date, reason: 'avond_gemist' }),
+      });
+      if (res.ok) router.refresh();
+    } finally {
+      setApplying(false);
+    }
+  }
+
+  function dismissBanner() {
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem(dismissKey, '1');
+    }
+    setDismissed(true);
+  }
+
+  const showBanner = showCompensationBanner && !isCompensationDay && !dismissed;
 
   const past = buckets.filter((b) => b.position === 'past' && b.meds.length > 0);
   const current = buckets.find((b) => b.position === 'current' && b.meds.length > 0);
@@ -42,6 +84,41 @@ export default function TodayBoard({ date, buckets, carryOver }: Props) {
 
   return (
     <div className="space-y-3">
+      {showBanner && (
+        <div className="rounded-2xl bg-amber-50 border border-amber-300 p-4 text-amber-900 shadow-sm animate-slide-up">
+          <p className="font-semibold leading-snug">
+            ⚠️ Je hebt gisteravond je antidepressiva gemist
+          </p>
+          <p className="text-sm mt-1 opacity-90">
+            Vandaag verspreid over ochtend, middag en avond (1× per moment).
+          </p>
+          <div className="flex gap-2 mt-3">
+            <button
+              type="button"
+              onClick={applyCompensation}
+              disabled={applying}
+              className="flex-1 bg-amber-500 hover:bg-amber-600 active:bg-amber-700 text-white font-bold py-2 px-3 rounded-xl shadow disabled:opacity-50 text-sm"
+            >
+              {applying ? 'Bezig…' : 'Ja, pas aan'}
+            </button>
+            <button
+              type="button"
+              onClick={dismissBanner}
+              disabled={applying}
+              className="flex-1 bg-white text-amber-900 border border-amber-300 hover:bg-amber-100 font-semibold py-2 px-3 rounded-xl text-sm"
+            >
+              Nee, gewoon normaal
+            </button>
+          </div>
+        </div>
+      )}
+
+      {isCompensationDay && (
+        <div className="rounded-2xl bg-amber-100/80 border border-amber-300 px-4 py-2 text-amber-900 text-sm">
+          🩹 Compensatiedag actief — antidepressiva 1× per moment.
+        </div>
+      )}
+
       {orderedPast.map((b) => (
         <SlotBlock
           key={`past-${b.slot}`}

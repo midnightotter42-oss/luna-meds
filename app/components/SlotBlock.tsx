@@ -40,10 +40,22 @@ interface MedRowProps {
   flash: boolean;
 }
 
+function weeklyBadgeClass(weeklyCount: number, weeklyMin: number): string {
+  if (weeklyCount >= weeklyMin) {
+    return 'bg-green-100 text-green-700';
+  }
+  const dayOfWeek = new Date().getDay(); // 0 = zondag, 5 = vrijdag, 6 = zaterdag
+  const isWeekendish = dayOfWeek === 0 || dayOfWeek === 5 || dayOfWeek === 6;
+  if (isWeekendish) return 'bg-orange-100 text-orange-700';
+  return 'bg-slate-100 text-slate-600';
+}
+
 function MedRow({ med, emphasize, flash }: MedRowProps) {
   const taken = med.status === 'taken';
   const missed = !taken && med.status === 'missed';
   const essential = med.type === 'medicatie';
+  const showWeekly = typeof med.weeklyMin === 'number' && med.weeklyMin > 0;
+  const weeklyCount = med.weeklyCount ?? 0;
 
   const rowBg = taken
     ? 'bg-green-50 border-green-200'
@@ -73,6 +85,15 @@ function MedRow({ med, emphasize, flash }: MedRowProps) {
               </span>
             )}
           </div>
+          {showWeekly && med.weeklyMin && (
+            <div className="mt-1">
+              <span
+                className={`text-[10px] px-2 py-0.5 rounded-full font-semibold ${weeklyBadgeClass(weeklyCount, med.weeklyMin)}`}
+              >
+                Deze week {weeklyCount}/{med.weeklyMin}×
+              </span>
+            </div>
+          )}
           {med.notes && !taken && (
             <p className="text-xs text-slate-500 mt-1 leading-snug">{med.notes}</p>
           )}

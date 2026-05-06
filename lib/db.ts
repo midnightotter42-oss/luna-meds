@@ -58,7 +58,15 @@ export function initDb(): Promise<void> {
     `);
     // type was added later; legacy rows stay NULL and worden via catalog/heuristiek opgelost
     await pool.query(`ALTER TABLE custom_schedule ADD COLUMN IF NOT EXISTS type TEXT`);
+    await pool.query(`ALTER TABLE custom_schedule ADD COLUMN IF NOT EXISTS weekly_min INTEGER DEFAULT NULL`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_custom_schedule_day ON custom_schedule(day_of_week)`);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS compensation_days (
+        date TEXT PRIMARY KEY,
+        reason TEXT,
+        created_at TIMESTAMP DEFAULT NOW()
+      )
+    `);
     await pool.query(`
       CREATE TABLE IF NOT EXISTS reminder_log (
         id SERIAL PRIMARY KEY,
@@ -235,6 +243,7 @@ export interface ScheduleRow {
   enabled: number;
   notes: string | null;
   type: string | null;
+  weekly_min: number | null;
 }
 
 export async function getAllCustomSchedule(): Promise<ScheduleRow[]> {
@@ -261,6 +270,7 @@ export interface ScheduleEntryInput {
   enabled: 0 | 1;
   notes?: string | null;
   type?: 'medicatie' | 'supplement' | null;
+  weekly_min?: number | null;
 }
 
 export async function replaceCustomSchedule(entries: ScheduleEntryInput[]): Promise<void> {
@@ -271,9 +281,17 @@ export async function replaceCustomSchedule(entries: ScheduleEntryInput[]): Prom
     await client.query('DELETE FROM custom_schedule');
     for (const e of entries) {
       await client.query(
-        `INSERT INTO custom_schedule (day_of_week, medication_id, time, enabled, notes, type)
-         VALUES ($1, $2, $3, $4, $5, $6)`,
-        [e.day_of_week, e.medication_id, e.time, e.enabled, e.notes ?? null, e.type ?? null],
+        `INSERT INTO custom_schedule (day_of_week, medication_id, time, enabled, notes, type, weekly_min)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [
+          e.day_of_week,
+          e.medication_id,
+          e.time,
+          e.enabled,
+          e.notes ?? null,
+          e.type ?? null,
+          e.weekly_min ?? null,
+        ],
       );
     }
     await client.query('COMMIT');
@@ -354,4 +372,38 @@ export async function recordPushSent(
     [date, bracket, triggerType],
   );
   return result.rows.length > 0;
+}
+
+export async function insertCompensationDay(date: string, reason: string): Promise<void> {
+  await initDb();
+  await getPool().query(
+    `INSERT INTO compensation_days (date, reason)
+     VALUES ($1, $2)
+     ON CONFLICT (date) DO UPDATE SET reason = EXCLUDED.reason`,
+    [date, reason],
+  );
+}
+
+export async function getCompensationDay(date: string): Promise<boolean> {
+  await initDb();
+  const result = await getPool().query(
+    `SELECT 1 FROM compensation_days WHERE date = $1 LIMIT 1`,
+    [date],
+  );
+  return result.rows.length > 0;
+}
+
+export async function getWeeklyCountForMed(
+  medicationId: string,
+  weekStart: string,
+  weekEnd: string,
+): Promise<number> {
+  await initDb();
+  const result = await getPool().query<{ count: string }>(
+    `SELECT COUNT(DISTINCT date)::text AS count
+     FROM logs
+     WHERE medication_id = $1 AND taken = 1 AND date >= $2 AND date <= $3`,
+    [medicationId, weekStart, weekEnd],
+  );
+  return parseInt(result.rows[0]?.count ?? '0', 10);
 }

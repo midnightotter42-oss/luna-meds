@@ -25,6 +25,7 @@ interface ScheduleEntryBody {
   enabled?: unknown;
   notes?: unknown;
   type?: unknown;
+  weekly_min?: unknown;
 }
 
 interface ScheduleDayBody {
@@ -76,6 +77,14 @@ export async function POST(request: Request) {
       const notes = e.notes == null ? null : String(e.notes);
       const type =
         e.type === 'medicatie' || e.type === 'supplement' ? (e.type as 'medicatie' | 'supplement') : null;
+      let weekly_min: number | null = null;
+      if (e.weekly_min != null && e.weekly_min !== '') {
+        const n = Number(e.weekly_min);
+        if (!Number.isInteger(n) || n < 0 || n > 7) {
+          return NextResponse.json({ error: 'weekly_min moet 0-7 zijn' }, { status: 400 });
+        }
+        weekly_min = n > 0 ? n : null;
+      }
       entries.push({
         day_of_week: dow,
         medication_id: medId,
@@ -83,6 +92,7 @@ export async function POST(request: Request) {
         enabled,
         notes,
         type,
+        weekly_min,
       });
     }
   }

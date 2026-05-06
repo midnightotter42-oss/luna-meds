@@ -17,6 +17,8 @@ interface Entry {
   slot: Slot;
   type: MedicationType;
   notes: string | null;
+  weekly_min: number | null;
+  showAdvanced: boolean;
 }
 
 interface DayState {
@@ -41,6 +43,8 @@ function buildInitialState(schedule: WeekSchedule): DayState[] {
         slot: slotForTime(e.time),
         type: e.type,
         notes: e.notes,
+        weekly_min: e.weekly_min ?? null,
+        showAdvanced: false,
       }));
     return {
       day_of_week: d.day_of_week,
@@ -71,7 +75,10 @@ export default function ScheduleEditor({ initialSchedule }: Props) {
     setError(null);
     updateDay(dow, (d) => ({
       ...d,
-      entries: [...d.entries, { name: '', slot: 'ochtend', type, notes: null }],
+      entries: [
+        ...d.entries,
+        { name: '', slot: 'ochtend', type, notes: null, weekly_min: null, showAdvanced: false },
+      ],
     }));
   }
 
@@ -114,6 +121,7 @@ export default function ScheduleEditor({ initialSchedule }: Props) {
           enabled: true;
           notes: string | null;
           type: MedicationType;
+          weekly_min: number | null;
         }>;
       }> = [];
 
@@ -134,6 +142,7 @@ export default function ScheduleEditor({ initialSchedule }: Props) {
                 enabled: true as const,
                 notes: e.notes,
                 type: e.type,
+                weekly_min: e.weekly_min,
               };
             })
           : [];
@@ -311,6 +320,44 @@ export default function ScheduleEditor({ initialSchedule }: Props) {
                               );
                             })}
                           </div>
+                          <div className="flex items-center gap-2 text-xs">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                changeEntry(day.day_of_week, idx, (cur) => ({
+                                  ...cur,
+                                  showAdvanced: !cur.showAdvanced,
+                                }))
+                              }
+                              className="text-slate-500 hover:text-slate-800"
+                              aria-label="Geavanceerde opties"
+                            >
+                              ⚙️ {entry.weekly_min ? `min ${entry.weekly_min}×/week` : 'extra opties'}
+                            </button>
+                          </div>
+                          {entry.showAdvanced && (
+                            <div className="bg-white border border-slate-200 rounded-lg p-2 flex items-center gap-2">
+                              <label className="text-xs text-slate-600 flex-1">
+                                Minimaal × per week
+                              </label>
+                              <input
+                                type="number"
+                                min={0}
+                                max={7}
+                                value={entry.weekly_min ?? ''}
+                                onChange={(ev) => {
+                                  const raw = ev.target.value;
+                                  const n = raw === '' ? null : Math.max(0, Math.min(7, Number(raw)));
+                                  changeEntry(day.day_of_week, idx, (cur) => ({
+                                    ...cur,
+                                    weekly_min: n === null || Number.isNaN(n) ? null : n,
+                                  }));
+                                }}
+                                placeholder="—"
+                                className="w-16 bg-slate-50 border border-slate-200 rounded px-2 py-1 text-sm text-slate-800 text-center"
+                              />
+                            </div>
+                          )}
                         </div>
                       ))}
                       <button

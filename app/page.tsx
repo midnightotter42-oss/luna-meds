@@ -1,7 +1,12 @@
 import Link from 'next/link';
-import { getLogsForDate, getLogsForDateRangeWithoutPhotos, type LogEntryNoPhoto } from '@/lib/db';
+import {
+  getCompensationDay,
+  getLogsForDate,
+  getLogsForDateRangeWithoutPhotos,
+  type LogEntryNoPhoto,
+} from '@/lib/db';
 import { amsterdamParts, attachStatus, isEssential, todayISO } from '@/lib/status';
-import { getMedicationsForDate } from '@/lib/schedule';
+import { getMedicationsForDate, isAntidepressivaId } from '@/lib/schedule';
 import { SLOT_ORDER, groupBySlot } from '@/lib/medications';
 import type { MedicationWithStatus, Slot } from '@/lib/types';
 import TodayBoard from './components/TodayBoard';
@@ -100,12 +105,28 @@ function positionForSlot(slot: Slot, activeSlot: Slot): 'past' | 'current' | 'fu
 export default async function HomePage() {
   const now = new Date();
   const date = todayISO(now);
-  const [meds, logs, logDays] = await Promise.all([
+  const yesterday = new Date(now);
+  yesterday.setDate(now.getDate() - 1);
+  const yesterdayISO = todayISO(yesterday);
+
+  const [meds, logs, logDays, yesterdayMeds, yesterdayLogs, isCompensationDay] = await Promise.all([
     getMedicationsForDate(now),
     getLogsForDate(date),
     buildLogDays(now),
+    getMedicationsForDate(yesterday),
+    getLogsForDate(yesterdayISO),
+    getCompensationDay(date),
   ]);
   const withStatus = attachStatus(meds, logs, now);
+
+  const yesterdayHadEveningAnti = yesterdayMeds.some(
+    (m) => isAntidepressivaId(m.id) && m.slot === 'avond',
+  );
+  const yesterdayTookEveningAnti = yesterdayLogs.some(
+    (l) => l.taken === 1 && isAntidepressivaId(l.medication_id),
+  );
+  const showCompensationBanner =
+    yesterdayHadEveningAnti && !yesterdayTookEveningAnti && !isCompensationDay;
 
   const totalEssential = withStatus.filter(isEssential).length;
   const takenEssential = withStatus.filter((m) => isEssential(m) && m.status === 'taken').length;
@@ -165,7 +186,13 @@ export default async function HomePage() {
                   <p className="text-slate-600 mt-1">Goed bezig 💖</p>
                 </div>
               )}
-              <TodayBoard date={date} buckets={buckets} carryOver={carryOver} />
+              <TodayBoard
+                date={date}
+                buckets={buckets}
+                carryOver={carryOver}
+                showCompensationBanner={showCompensationBanner}
+                isCompensationDay={isCompensationDay}
+              />
             </>
           )}
 
