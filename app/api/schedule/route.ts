@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { replaceCustomSchedule, type ScheduleEntryInput } from '@/lib/db';
 import { getFullWeekSchedule } from '@/lib/schedule';
-import { MEDICATIONS, getMedicationById } from '@/lib/medications';
+import { MEDICATIONS } from '@/lib/medications';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -24,6 +24,7 @@ interface ScheduleEntryBody {
   time?: unknown;
   enabled?: unknown;
   notes?: unknown;
+  type?: unknown;
 }
 
 interface ScheduleDayBody {
@@ -37,6 +38,10 @@ interface SchedulePostBody {
 
 function isValidTime(t: string): boolean {
   return /^\d{2}:\d{2}$/.test(t);
+}
+
+function isValidSlug(s: string): boolean {
+  return /^[a-z0-9][a-z0-9-]*$/.test(s);
 }
 
 export async function POST(request: Request) {
@@ -60,8 +65,8 @@ export async function POST(request: Request) {
     if (!Array.isArray(dayRaw.entries)) continue;
     for (const e of dayRaw.entries as ScheduleEntryBody[]) {
       const medId = String(e.medication_id ?? '');
-      if (!getMedicationById(medId)) {
-        return NextResponse.json({ error: `Onbekend medicijn: ${medId}` }, { status: 400 });
+      if (!medId || !isValidSlug(medId)) {
+        return NextResponse.json({ error: `Ongeldige medication_id: ${medId}` }, { status: 400 });
       }
       const time = String(e.time ?? '');
       if (!isValidTime(time)) {
@@ -69,12 +74,15 @@ export async function POST(request: Request) {
       }
       const enabled: 0 | 1 = e.enabled === false ? 0 : 1;
       const notes = e.notes == null ? null : String(e.notes);
+      const type =
+        e.type === 'medicatie' || e.type === 'supplement' ? (e.type as 'medicatie' | 'supplement') : null;
       entries.push({
         day_of_week: dow,
         medication_id: medId,
         time,
         enabled,
         notes,
+        type,
       });
     }
   }

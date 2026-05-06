@@ -1,25 +1,23 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import type { WeekSchedule } from '@/lib/schedule';
-
-interface MedCatalogItem {
-  id: string;
-  name: string;
-  type: 'medicatie' | 'supplement';
-  required: boolean;
-  defaultTime: string;
-  defaultNotes: string | null;
-}
+import {
+  SLOT_DEFAULT_TIME,
+  SLOT_LABEL,
+  SLOT_ORDER,
+  nameToMedicationId,
+  slotForTime,
+} from '@/lib/medications';
+import type { MedicationType, Slot } from '@/lib/types';
 
 interface Entry {
-  medication_id: string;
-  time: string;
+  name: string;
+  slot: Slot;
+  type: MedicationType;
   notes: string | null;
 }
-
-type AddKind = 'medicatie' | 'supplement';
 
 interface DayState {
   day_of_week: number;
@@ -30,7 +28,6 @@ interface DayState {
 
 interface Props {
   initialSchedule: WeekSchedule;
-  catalog: MedCatalogItem[];
 }
 
 const DAY_LABEL_FULL = ['Maandag', 'Dinsdag', 'Woensdag', 'Donderdag', 'Vrijdag', 'Zaterdag', 'Zondag'];
@@ -40,8 +37,9 @@ function buildInitialState(schedule: WeekSchedule): DayState[] {
     const entries: Entry[] = d.entries
       .filter((e) => e.enabled)
       .map((e) => ({
-        medication_id: e.medication_id,
-        time: e.time,
+        name: e.name,
+        slot: slotForTime(e.time),
+        type: e.type,
         notes: e.notes,
       }));
     return {
@@ -53,19 +51,13 @@ function buildInitialState(schedule: WeekSchedule): DayState[] {
   });
 }
 
-export default function ScheduleEditor({ initialSchedule, catalog }: Props) {
+export default function ScheduleEditor({ initialSchedule }: Props) {
   const router = useRouter();
   const [days, setDays] = useState<DayState[]>(() => buildInitialState(initialSchedule));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [savedAt, setSavedAt] = useState<number | null>(null);
   const [openDay, setOpenDay] = useState<number>(0);
-
-  const catalogById = useMemo(() => {
-    const m = new Map<string, MedCatalogItem>();
-    for (const c of catalog) m.set(c.id, c);
-    return m;
-  }, [catalog]);
 
   function updateDay(dow: number, mut: (d: DayState) => DayState) {
     setDays((prev) => prev.map((d) => (d.day_of_week === dow ? mut(d) : d)));
@@ -75,26 +67,11 @@ export default function ScheduleEditor({ initialSchedule, catalog }: Props) {
     updateDay(dow, (d) => ({ ...d, enabled: !d.enabled }));
   }
 
-  function addEntry(dow: number, kind: AddKind) {
-    const day = days.find((d) => d.day_of_week === dow);
-    if (!day) return;
-    const usedIds = new Set(day.entries.map((e) => e.medication_id));
-    const next = catalog.find((c) => c.type === kind && !usedIds.has(c.id));
-    if (!next) {
-      setError(
-        kind === 'medicatie'
-          ? 'Alle medicijnen zijn al toegevoegd voor deze dag.'
-          : 'Alle supplementen zijn al toegevoegd voor deze dag.',
-      );
-      return;
-    }
+  function addEntry(dow: number, type: MedicationType) {
     setError(null);
     updateDay(dow, (d) => ({
       ...d,
-      entries: [
-        ...d.entries,
-        { medication_id: next.id, time: next.defaultTime, notes: next.defaultNotes },
-      ],
+      entries: [...d.entries, { name: '', slot: 'ochtend', type, notes: null }],
     }));
   }
 
@@ -129,38 +106,53 @@ export default function ScheduleEditor({ initialSchedule, catalog }: Props) {
     setSaving(true);
     setError(null);
     try {
+      const dayPayloads: Array<{
+        day_of_week: number;
+        entries: Array<{
+          medication_id: string;
+          time: string;
+          enabled: true;
+          notes: string | null;
+          type: MedicationType;
+        }>;
+      }> = [];
+
       for (const d of days) {
-        if (!d.enabled) continue;
+        const entries = d.enabled
+          ? d.entries.map((e) => {
+              const trimmed = e.name.trim();
+              if (!trimmed) {
+                throw new Error(`${d.name}: vul een naam in voor elk medicijn.`);
+              }
+              const slug = nameToMedicationId(trimmed);
+              if (!slug) {
+                throw new Error(`${d.name}: ongeldige naam "${trimmed}".`);
+              }
+              return {
+                medication_id: slug,
+                time: SLOT_DEFAULT_TIME[e.slot],
+                enabled: true as const,
+                notes: e.notes,
+                type: e.type,
+              };
+            })
+          : [];
+
         const seen = new Set<string>();
-        for (const e of d.entries) {
+        for (const e of entries) {
           if (seen.has(e.medication_id)) {
-            throw new Error(`${d.name}: medicijn mag maar 1x per dag voorkomen.`);
+            throw new Error(`${d.name}: ${e.medication_id} mag maar 1x per dag voorkomen.`);
           }
           seen.add(e.medication_id);
-          if (!/^\d{2}:\d{2}$/.test(e.time)) {
-            throw new Error(`${d.name}: ongeldige tijd voor ${e.medication_id}`);
-          }
         }
-      }
 
-      const body = {
-        days: days.map((d) => ({
-          day_of_week: d.day_of_week,
-          entries: d.enabled
-            ? d.entries.map((e) => ({
-                medication_id: e.medication_id,
-                time: e.time,
-                enabled: true,
-                notes: e.notes,
-              }))
-            : [],
-        })),
-      };
+        dayPayloads.push({ day_of_week: d.day_of_week, entries });
+      }
 
       const res = await fetch('/api/schedule', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(body),
+        body: JSON.stringify({ days: dayPayloads }),
       });
       if (!res.ok) {
         const j = await res.json().catch(() => ({}));
@@ -226,11 +218,10 @@ export default function ScheduleEditor({ initialSchedule, catalog }: Props) {
 
             {isOpen && day.enabled && (
               <div className="px-4 pb-4 space-y-4 border-t border-slate-100 pt-3 animate-slide-up">
-                {(['medicatie', 'supplement'] as AddKind[]).map((kind) => {
+                {(['medicatie', 'supplement'] as MedicationType[]).map((kind) => {
                   const sectionEntries = day.entries
-                    .map((e, idx) => ({ e, idx, cat: catalogById.get(e.medication_id) }))
-                    .filter(({ cat }) => cat && cat.type === kind);
-                  const sectionCatalog = catalog.filter((c) => c.type === kind);
+                    .map((e, idx) => ({ e, idx }))
+                    .filter(({ e }) => e.type === kind);
                   const heading =
                     kind === 'medicatie' ? 'Medicatie (essentieel)' : 'Supplementen';
                   const addLabel =
@@ -239,6 +230,15 @@ export default function ScheduleEditor({ initialSchedule, catalog }: Props) {
                     kind === 'medicatie'
                       ? 'bg-rose-50 hover:bg-rose-100 text-rose-700'
                       : 'bg-blue-50 hover:bg-blue-100 text-blue-700';
+                  const badgeClass =
+                    kind === 'medicatie'
+                      ? 'bg-rose-100 text-rose-700'
+                      : 'bg-blue-100 text-blue-700';
+                  const badgeLabel = kind === 'medicatie' ? 'essentieel' : 'supplement';
+                  const namePlaceholder =
+                    kind === 'medicatie'
+                      ? 'Naam medicijn (bv. Levothyroxine)'
+                      : 'Naam supplement (bv. Vitamine D)';
 
                   return (
                     <div key={kind} className="space-y-2">
@@ -246,9 +246,7 @@ export default function ScheduleEditor({ initialSchedule, catalog }: Props) {
                         <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500">
                           {heading}
                         </h3>
-                        <span className="text-xs text-slate-400">
-                          {sectionEntries.length}/{sectionCatalog.length}
-                        </span>
+                        <span className="text-xs text-slate-400">{sectionEntries.length}</span>
                       </div>
                       {sectionEntries.length === 0 && (
                         <p className="text-sm text-slate-400 italic">
@@ -257,65 +255,64 @@ export default function ScheduleEditor({ initialSchedule, catalog }: Props) {
                             : 'Nog geen supplementen ingepland.'}
                         </p>
                       )}
-                      {sectionEntries.map(({ e: entry, idx, cat }) => {
-                        const badgeClass =
-                          kind === 'medicatie'
-                            ? 'bg-rose-100 text-rose-700'
-                            : 'bg-blue-100 text-blue-700';
-                        const badgeLabel = kind === 'medicatie' ? 'essentieel' : 'supplement';
-                        return (
-                          <div
-                            key={idx}
-                            className="bg-slate-50 rounded-xl p-3 flex items-center gap-2"
-                          >
+                      {sectionEntries.map(({ e: entry, idx }) => (
+                        <div key={idx} className="bg-slate-50 rounded-xl p-3 space-y-2">
+                          <div className="flex items-start gap-2">
                             <div className="flex-1 min-w-0 flex flex-col gap-1">
-                              <select
-                                value={entry.medication_id}
-                                onChange={(e) => {
-                                  const newId = e.target.value;
-                                  const newCat = catalogById.get(newId);
+                              <input
+                                type="text"
+                                value={entry.name}
+                                onChange={(ev) =>
                                   changeEntry(day.day_of_week, idx, (cur) => ({
                                     ...cur,
-                                    medication_id: newId,
-                                    notes: newCat?.defaultNotes ?? cur.notes,
-                                  }));
-                                }}
+                                    name: ev.target.value,
+                                  }))
+                                }
+                                placeholder={namePlaceholder}
                                 className="w-full bg-white border border-slate-200 rounded-lg px-2 py-2 text-slate-800 text-sm"
-                              >
-                                {sectionCatalog.map((c) => (
-                                  <option key={c.id} value={c.id}>
-                                    {c.name}
-                                  </option>
-                                ))}
-                              </select>
+                              />
                               <span
                                 className={`text-[10px] font-semibold px-2 py-0.5 rounded-full self-start ${badgeClass}`}
                               >
                                 {badgeLabel}
                               </span>
                             </div>
-                            <input
-                              type="time"
-                              value={entry.time}
-                              onChange={(e) =>
-                                changeEntry(day.day_of_week, idx, (cur) => ({
-                                  ...cur,
-                                  time: e.target.value,
-                                }))
-                              }
-                              className="bg-white border border-slate-200 rounded-lg px-2 py-2 text-slate-800 text-sm"
-                            />
                             <button
                               type="button"
                               onClick={() => removeEntry(day.day_of_week, idx)}
-                              aria-label={`Verwijder ${cat?.name ?? entry.medication_id}`}
+                              aria-label={`Verwijder ${entry.name || 'medicijn'}`}
                               className="w-9 h-9 shrink-0 rounded-lg bg-red-50 text-red-500 hover:bg-red-100 flex items-center justify-center"
                             >
                               ✕
                             </button>
                           </div>
-                        );
-                      })}
+                          <div className="flex gap-2">
+                            {SLOT_ORDER.map((slot) => {
+                              const active = entry.slot === slot;
+                              return (
+                                <button
+                                  key={slot}
+                                  type="button"
+                                  onClick={() =>
+                                    changeEntry(day.day_of_week, idx, (cur) => ({
+                                      ...cur,
+                                      slot,
+                                    }))
+                                  }
+                                  aria-pressed={active}
+                                  className={`flex-1 py-2 rounded-lg text-sm font-semibold transition-colors border ${
+                                    active
+                                      ? 'bg-blue-500 text-white border-blue-500 shadow'
+                                      : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-100'
+                                  }`}
+                                >
+                                  {SLOT_LABEL[slot]}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      ))}
                       <button
                         type="button"
                         onClick={() => addEntry(day.day_of_week, kind)}

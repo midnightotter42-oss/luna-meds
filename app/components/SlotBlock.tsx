@@ -115,18 +115,10 @@ export default function SlotBlock({
 }: SlotBlockProps) {
   const router = useRouter();
   const inputRef = useRef<HTMLInputElement>(null);
+  const sectionRef = useRef<HTMLElement | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [justTaken, setJustTaken] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [expanded, setExpanded] = useState<boolean>(isCurrentSlot);
-  const sectionRef = useRef<HTMLElement | null>(null);
-
-  useEffect(() => {
-    if (isCurrentSlot) return;
-    if (expandRequestKey === undefined) return;
-    setExpanded(true);
-    sectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  }, [expandRequestKey, isCurrentSlot]);
 
   const taken = meds.filter((m) => m.status === 'taken').length;
   const total = meds.length;
@@ -139,6 +131,16 @@ export default function SlotBlock({
   const missedSupplements = meds.filter(
     (m) => m.status !== 'taken' && m.type === 'supplement',
   );
+
+  // Past slot: collapsed when alles genomen, uitgeklapt als er iets mist zodat Luna het ziet.
+  const [expanded, setExpanded] = useState<boolean>(() => isCurrentSlot || !allTaken);
+
+  useEffect(() => {
+    if (isCurrentSlot) return;
+    if (expandRequestKey === undefined) return;
+    setExpanded(true);
+    sectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, [expandRequestKey, isCurrentSlot]);
 
   async function submitTaken(file?: File) {
     if (pendingIds.length === 0 || submitting) return;

@@ -80,8 +80,35 @@ export const SLOT_EMOJI: Record<Slot, string> = {
   avond: '🌙',
 };
 
+export const SLOT_DEFAULT_TIME: Record<Slot, string> = {
+  ochtend: '08:00',
+  middag: '13:00',
+  avond: '21:00',
+};
+
+export function slotForTime(time: string): Slot {
+  const [h] = time.split(':').map(Number);
+  if (h < 12) return 'ochtend';
+  if (h < 18) return 'middag';
+  return 'avond';
+}
+
 export function getMedicationById(id: string): Medication | undefined {
   return MEDICATIONS.find((m) => m.id === id);
+}
+
+export function nameToMedicationId(name: string): string {
+  return name
+    .toLowerCase()
+    .trim()
+    .replace(/\s+/g, '-')
+    .replace(/[^a-z0-9-]/g, '');
+}
+
+export function prettifyMedicationId(id: string): string {
+  const spaced = id.replace(/-/g, ' ').trim();
+  if (!spaced) return id;
+  return spaced.charAt(0).toUpperCase() + spaced.slice(1);
 }
 
 export function groupBySlot<T extends Medication>(meds: T[]): Record<Slot, T[]> {

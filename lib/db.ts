@@ -56,6 +56,8 @@ export function initDb(): Promise<void> {
         UNIQUE(day_of_week, medication_id)
       )
     `);
+    // type was added later; legacy rows stay NULL and worden via catalog/heuristiek opgelost
+    await pool.query(`ALTER TABLE custom_schedule ADD COLUMN IF NOT EXISTS type TEXT`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_custom_schedule_day ON custom_schedule(day_of_week)`);
     await pool.query(`
       CREATE TABLE IF NOT EXISTS reminder_log (
@@ -232,6 +234,7 @@ export interface ScheduleRow {
   time: string;
   enabled: number;
   notes: string | null;
+  type: string | null;
 }
 
 export async function getAllCustomSchedule(): Promise<ScheduleRow[]> {
@@ -257,6 +260,7 @@ export interface ScheduleEntryInput {
   time: string;
   enabled: 0 | 1;
   notes?: string | null;
+  type?: 'medicatie' | 'supplement' | null;
 }
 
 export async function replaceCustomSchedule(entries: ScheduleEntryInput[]): Promise<void> {
@@ -267,9 +271,9 @@ export async function replaceCustomSchedule(entries: ScheduleEntryInput[]): Prom
     await client.query('DELETE FROM custom_schedule');
     for (const e of entries) {
       await client.query(
-        `INSERT INTO custom_schedule (day_of_week, medication_id, time, enabled, notes)
-         VALUES ($1, $2, $3, $4, $5)`,
-        [e.day_of_week, e.medication_id, e.time, e.enabled, e.notes ?? null],
+        `INSERT INTO custom_schedule (day_of_week, medication_id, time, enabled, notes, type)
+         VALUES ($1, $2, $3, $4, $5, $6)`,
+        [e.day_of_week, e.medication_id, e.time, e.enabled, e.notes ?? null, e.type ?? null],
       );
     }
     await client.query('COMMIT');

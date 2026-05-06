@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { getMedicationById } from '@/lib/medications';
+import { getMedicationById, prettifyMedicationId } from '@/lib/medications';
 import { getLogsForDateRangeWithoutPhotos, type LogEntryNoPhoto } from '@/lib/db';
 import { amsterdamParts, todayISO } from '@/lib/status';
 import { getMedicationsForDate } from '@/lib/schedule';
@@ -69,7 +69,18 @@ export default async function HistoryPage() {
     }
     if (!rowMeds.find((m) => m.id === id)) {
       const fallback = getMedicationById(id);
-      if (fallback) rowMeds.push(fallback);
+      if (fallback) {
+        rowMeds.push(fallback);
+      } else {
+        rowMeds.push({
+          id,
+          name: prettifyMedicationId(id),
+          slot: 'ochtend',
+          time: '08:00',
+          type: 'supplement',
+          required: false,
+        });
+      }
     }
   }
   rowMeds.sort((a, b) => a.time.localeCompare(b.time));

@@ -1,7 +1,9 @@
-import { MEDICATIONS, getMedicationById } from './medications';
+import { MEDICATIONS, getMedicationById, prettifyMedicationId, slotForTime } from './medications';
 import { getAllCustomSchedule, type ScheduleRow } from './db';
 import { amsterdamParts } from './status';
-import type { Medication, Slot } from './types';
+import type { Medication, MedicationType } from './types';
+
+export { slotForTime };
 
 export const WEEKDAY_NAMES = ['maandag', 'dinsdag', 'woensdag', 'donderdag', 'vrijdag', 'zaterdag', 'zondag'];
 export const WEEKDAY_SHORT = ['ma', 'di', 'wo', 'do', 'vr', 'za', 'zo'];
@@ -14,21 +16,32 @@ export function dayOfWeekForDate(date: Date): number {
   return jsDayToMonFirst(amsterdamParts(date).weekday);
 }
 
-export function slotForTime(time: string): Slot {
-  const [h] = time.split(':').map(Number);
-  if (h < 12) return 'ochtend';
-  if (h < 18) return 'middag';
-  return 'avond';
+function isMedicationType(v: unknown): v is MedicationType {
+  return v === 'medicatie' || v === 'supplement';
 }
 
-function rowToMedication(row: ScheduleRow): Medication | null {
+function rowToMedication(row: ScheduleRow): Medication {
   const base = getMedicationById(row.medication_id);
-  if (!base) return null;
+  const type: MedicationType = isMedicationType(row.type)
+    ? row.type
+    : base?.type ?? 'supplement';
+  if (base) {
+    return {
+      ...base,
+      time: row.time,
+      slot: slotForTime(row.time),
+      notes: row.notes ?? base.notes,
+      type,
+    };
+  }
   return {
-    ...base,
-    time: row.time,
+    id: row.medication_id,
+    name: prettifyMedicationId(row.medication_id),
     slot: slotForTime(row.time),
-    notes: row.notes ?? base.notes,
+    time: row.time,
+    notes: row.notes ?? undefined,
+    type,
+    required: type === 'medicatie',
   };
 }
 
@@ -42,8 +55,7 @@ export async function getMedicationsForDate(date: Date): Promise<Medication[]> {
   for (const row of all) {
     if (row.day_of_week !== dow) continue;
     if (row.enabled !== 1) continue;
-    const med = rowToMedication(row);
-    if (med) meds.push(med);
+    meds.push(rowToMedication(row));
   }
   meds.sort((a, b) => a.time.localeCompare(b.time));
   return meds;
@@ -56,9 +68,11 @@ export interface WeekSchedule {
     name: string;
     entries: Array<{
       medication_id: string;
+      name: string;
       time: string;
       enabled: boolean;
       notes: string | null;
+      type: MedicationType;
     }>;
   }>;
 }
@@ -73,19 +87,26 @@ export async function getFullWeekSchedule(): Promise<WeekSchedule> {
     let entries: WeekSchedule['days'][number]['entries'];
     if (hasCustom) {
       entries = rows
-        .map((r) => ({
-          medication_id: r.medication_id,
-          time: r.time,
-          enabled: r.enabled === 1,
-          notes: r.notes,
-        }))
+        .map((r) => {
+          const med = rowToMedication(r);
+          return {
+            medication_id: r.medication_id,
+            name: med.name,
+            time: r.time,
+            enabled: r.enabled === 1,
+            notes: r.notes,
+            type: med.type,
+          };
+        })
         .sort((a, b) => a.time.localeCompare(b.time));
     } else {
       entries = MEDICATIONS.map((m) => ({
         medication_id: m.id,
+        name: m.name,
         time: m.time,
         enabled: true,
         notes: m.notes ?? null,
+        type: m.type,
       })).sort((a, b) => a.time.localeCompare(b.time));
     }
     days.push({ day_of_week: dow, name: WEEKDAY_NAMES[dow], entries });

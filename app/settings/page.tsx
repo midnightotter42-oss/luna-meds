@@ -1,5 +1,4 @@
 import Link from 'next/link';
-import { MEDICATIONS } from '@/lib/medications';
 import { getFullWeekSchedule } from '@/lib/schedule';
 import ScheduleEditor from '../components/ScheduleEditor';
 import PushToggle from '../components/PushToggle';
@@ -8,14 +7,6 @@ export const dynamic = 'force-dynamic';
 
 export default async function SettingsPage() {
   const schedule = await getFullWeekSchedule();
-  const catalog = MEDICATIONS.map((m) => ({
-    id: m.id,
-    name: m.name,
-    type: m.type,
-    required: m.required,
-    defaultTime: m.time,
-    defaultNotes: m.notes ?? null,
-  }));
   const vapidPublicKey = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY ?? null;
 
   return (
@@ -44,7 +35,7 @@ export default async function SettingsPage() {
           )}
         </div>
 
-        <ScheduleEditor initialSchedule={schedule} catalog={catalog} />
+        <ScheduleEditor initialSchedule={schedule} />
       </div>
     </div>
   );

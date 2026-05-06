@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server';
 import { createLog } from '@/lib/db';
-import { getMedicationById } from '@/lib/medications';
 import { timeHHMM, todayISO } from '@/lib/status';
 import type { LogEntry } from '@/lib/types';
 
@@ -123,8 +122,8 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'medication_ids ontbreekt' }, { status: 400 });
   }
   for (const id of medicationIds) {
-    if (!getMedicationById(id)) {
-      return NextResponse.json({ error: `Onbekende medication_id: ${id}` }, { status: 400 });
+    if (!/^[a-z0-9][a-z0-9-]*$/.test(id)) {
+      return NextResponse.json({ error: `Ongeldige medication_id: ${id}` }, { status: 400 });
     }
   }
 
