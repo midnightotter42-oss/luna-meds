@@ -1,31 +1,24 @@
-import { neon, type NeonQueryFunction } from '@neondatabase/serverless';
+import { Pool } from 'pg';
 import type { LogEntry } from './types';
 
-let _sql: NeonQueryFunction<false, false> | null = null;
-function getSql(): NeonQueryFunction<false, false> {
-  if (_sql) return _sql;
+let _pool: Pool | null = null;
+function getPool(): Pool {
+  if (_pool) return _pool;
   if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL niet gezet');
-  _sql = neon(process.env.DATABASE_URL);
-  return _sql;
+  _pool = new Pool({
+    connectionString: process.env.DATABASE_URL,
+    ssl: { rejectUnauthorized: false },
+  });
+  return _pool;
 }
-
-const sql = new Proxy(function () {} as unknown as NeonQueryFunction<false, false>, {
-  apply(_target, _thisArg, args: unknown[]) {
-    return (getSql() as unknown as (...a: unknown[]) => unknown)(...args);
-  },
-  get(_target, prop) {
-    return (getSql() as unknown as Record<string | symbol, unknown>)[prop];
-  },
-}) as NeonQueryFunction<false, false>;
-
-export { sql };
 
 let _initPromise: Promise<void> | null = null;
 
 export function initDb(): Promise<void> {
   if (_initPromise) return _initPromise;
+  const pool = getPool();
   _initPromise = (async () => {
-    await sql`
+    await pool.query(`
       CREATE TABLE IF NOT EXISTS logs (
         id SERIAL PRIMARY KEY,
         date TEXT NOT NULL,
@@ -36,14 +29,14 @@ export function initDb(): Promise<void> {
         notes TEXT,
         created_at TIMESTAMP DEFAULT NOW()
       )
-    `;
-    await sql`CREATE INDEX IF NOT EXISTS idx_logs_date ON logs(date)`;
-    await sql`CREATE INDEX IF NOT EXISTS idx_logs_date_med ON logs(date, medication_id)`;
-    await sql`
+    `);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_logs_date ON logs(date)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_logs_date_med ON logs(date, medication_id)`);
+    await pool.query(`
       CREATE UNIQUE INDEX IF NOT EXISTS idx_logs_unique_taken
         ON logs(date, medication_id) WHERE taken = 1
-    `;
-    await sql`
+    `);
+    await pool.query(`
       CREATE TABLE IF NOT EXISTS custom_schedule (
         id SERIAL PRIMARY KEY,
         day_of_week INTEGER NOT NULL,
@@ -53,18 +46,18 @@ export function initDb(): Promise<void> {
         notes TEXT,
         UNIQUE(day_of_week, medication_id)
       )
-    `;
-    await sql`CREATE INDEX IF NOT EXISTS idx_custom_schedule_day ON custom_schedule(day_of_week)`;
-    await sql`
+    `);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_custom_schedule_day ON custom_schedule(day_of_week)`);
+    await pool.query(`
       CREATE TABLE IF NOT EXISTS reminder_log (
         id SERIAL PRIMARY KEY,
         date TEXT NOT NULL,
         tier TEXT NOT NULL,
         sent_at TIMESTAMP DEFAULT NOW()
       )
-    `;
-    await sql`CREATE INDEX IF NOT EXISTS idx_reminder_log_date ON reminder_log(date)`;
-    await sql`
+    `);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_reminder_log_date ON reminder_log(date)`);
+    await pool.query(`
       CREATE TABLE IF NOT EXISTS push_subscriptions (
         id SERIAL PRIMARY KEY,
         endpoint TEXT UNIQUE NOT NULL,
@@ -72,8 +65,8 @@ export function initDb(): Promise<void> {
         auth TEXT NOT NULL,
         created_at TIMESTAMP DEFAULT NOW()
       )
-    `;
-    await sql`
+    `);
+    await pool.query(`
       CREATE TABLE IF NOT EXISTS push_log (
         id SERIAL PRIMARY KEY,
         date TEXT NOT NULL,
@@ -81,11 +74,11 @@ export function initDb(): Promise<void> {
         trigger_type TEXT NOT NULL,
         sent_at TIMESTAMP DEFAULT NOW()
       )
-    `;
-    await sql`
+    `);
+    await pool.query(`
       CREATE UNIQUE INDEX IF NOT EXISTS idx_push_log_unique
         ON push_log(date, bracket, trigger_type)
-    `;
+    `);
   })().catch((err) => {
     _initPromise = null;
     throw err;
@@ -104,23 +97,24 @@ export interface CreateLogInput {
 
 export async function createLog(input: CreateLogInput): Promise<LogEntry> {
   await initDb();
-  const rows = (await sql`
-    INSERT INTO logs (date, time_taken, medication_id, taken, photo_path, notes)
-    VALUES (
-      ${input.date},
-      ${input.time_taken},
-      ${input.medication_id},
-      ${input.taken},
-      ${input.photo_path ?? null},
-      ${input.notes ?? null}
-    )
-    ON CONFLICT (date, medication_id) WHERE taken = 1
-    DO UPDATE SET
-      time_taken = EXCLUDED.time_taken,
-      photo_path = COALESCE(EXCLUDED.photo_path, logs.photo_path)
-    RETURNING *
-  `) as LogEntry[];
-  return rows[0];
+  const result = await getPool().query<LogEntry>(
+    `INSERT INTO logs (date, time_taken, medication_id, taken, photo_path, notes)
+     VALUES ($1, $2, $3, $4, $5, $6)
+     ON CONFLICT (date, medication_id) WHERE taken = 1
+     DO UPDATE SET
+       time_taken = EXCLUDED.time_taken,
+       photo_path = COALESCE(EXCLUDED.photo_path, logs.photo_path)
+     RETURNING *`,
+    [
+      input.date,
+      input.time_taken,
+      input.medication_id,
+      input.taken,
+      input.photo_path ?? null,
+      input.notes ?? null,
+    ],
+  );
+  return result.rows[0];
 }
 
 export interface LogEntryNoPhoto {
@@ -136,11 +130,13 @@ export interface LogEntryNoPhoto {
 
 export async function getLogsForDateWithoutPhotos(date: string): Promise<LogEntryNoPhoto[]> {
   await initDb();
-  return (await sql`
-    SELECT id, date, time_taken, medication_id, taken, notes, created_at,
-           (photo_path IS NOT NULL) AS has_photo
-    FROM logs WHERE date = ${date} ORDER BY created_at DESC
-  `) as LogEntryNoPhoto[];
+  const result = await getPool().query<LogEntryNoPhoto>(
+    `SELECT id, date, time_taken, medication_id, taken, notes, created_at,
+            (photo_path IS NOT NULL) AS has_photo
+     FROM logs WHERE date = $1 ORDER BY created_at DESC`,
+    [date],
+  );
+  return result.rows;
 }
 
 export async function getLogsForDateRangeWithoutPhotos(
@@ -148,52 +144,61 @@ export async function getLogsForDateRangeWithoutPhotos(
   toDate: string,
 ): Promise<LogEntryNoPhoto[]> {
   await initDb();
-  return (await sql`
-    SELECT id, date, time_taken, medication_id, taken, notes, created_at,
-           (photo_path IS NOT NULL) AS has_photo
-    FROM logs
-    WHERE date >= ${fromDate} AND date <= ${toDate}
-    ORDER BY date ASC, created_at DESC
-  `) as LogEntryNoPhoto[];
+  const result = await getPool().query<LogEntryNoPhoto>(
+    `SELECT id, date, time_taken, medication_id, taken, notes, created_at,
+            (photo_path IS NOT NULL) AS has_photo
+     FROM logs
+     WHERE date >= $1 AND date <= $2
+     ORDER BY date ASC, created_at DESC`,
+    [fromDate, toDate],
+  );
+  return result.rows;
 }
 
 export async function getLogPhoto(id: number): Promise<string | null> {
   await initDb();
-  const rows = (await sql`
-    SELECT photo_path FROM logs WHERE id = ${id} LIMIT 1
-  `) as Array<{ photo_path: string | null }>;
-  return rows[0]?.photo_path ?? null;
+  const result = await getPool().query<{ photo_path: string | null }>(
+    `SELECT photo_path FROM logs WHERE id = $1 LIMIT 1`,
+    [id],
+  );
+  return result.rows[0]?.photo_path ?? null;
 }
 
 export async function hasReminderBeenSent(date: string, tier: string): Promise<boolean> {
   await initDb();
-  const rows = (await sql`
-    SELECT 1 FROM reminder_log WHERE date = ${date} AND tier = ${tier} LIMIT 1
-  `) as unknown[];
-  return rows.length > 0;
+  const result = await getPool().query(
+    `SELECT 1 FROM reminder_log WHERE date = $1 AND tier = $2 LIMIT 1`,
+    [date, tier],
+  );
+  return result.rows.length > 0;
 }
 
 export async function recordReminderSent(date: string, tier: string): Promise<void> {
   await initDb();
-  await sql`
-    INSERT INTO reminder_log (date, tier) VALUES (${date}, ${tier})
-  `;
+  await getPool().query(
+    `INSERT INTO reminder_log (date, tier) VALUES ($1, $2)`,
+    [date, tier],
+  );
 }
 
 export async function getLogsForDate(date: string): Promise<LogEntry[]> {
   await initDb();
-  return (await sql`
-    SELECT * FROM logs WHERE date = ${date} ORDER BY created_at DESC
-  `) as LogEntry[];
+  const result = await getPool().query<LogEntry>(
+    `SELECT * FROM logs WHERE date = $1 ORDER BY created_at DESC`,
+    [date],
+  );
+  return result.rows;
 }
 
 export async function getLogsForDateRange(fromDate: string, toDate: string): Promise<LogEntry[]> {
   await initDb();
-  return (await sql`
-    SELECT * FROM logs
-    WHERE date >= ${fromDate} AND date <= ${toDate}
-    ORDER BY date ASC, created_at DESC
-  `) as LogEntry[];
+  const result = await getPool().query<LogEntry>(
+    `SELECT * FROM logs
+     WHERE date >= $1 AND date <= $2
+     ORDER BY date ASC, created_at DESC`,
+    [fromDate, toDate],
+  );
+  return result.rows;
 }
 
 export async function getLatestLogForMedicationOnDate(
@@ -201,13 +206,14 @@ export async function getLatestLogForMedicationOnDate(
   date: string,
 ): Promise<LogEntry | undefined> {
   await initDb();
-  const rows = (await sql`
-    SELECT * FROM logs
-    WHERE medication_id = ${medicationId} AND date = ${date} AND taken = 1
-    ORDER BY created_at DESC
-    LIMIT 1
-  `) as LogEntry[];
-  return rows[0];
+  const result = await getPool().query<LogEntry>(
+    `SELECT * FROM logs
+     WHERE medication_id = $1 AND date = $2 AND taken = 1
+     ORDER BY created_at DESC
+     LIMIT 1`,
+    [medicationId, date],
+  );
+  return result.rows[0];
 }
 
 export interface ScheduleRow {
@@ -221,16 +227,19 @@ export interface ScheduleRow {
 
 export async function getAllCustomSchedule(): Promise<ScheduleRow[]> {
   await initDb();
-  return (await sql`
-    SELECT * FROM custom_schedule ORDER BY day_of_week ASC, time ASC
-  `) as ScheduleRow[];
+  const result = await getPool().query<ScheduleRow>(
+    `SELECT * FROM custom_schedule ORDER BY day_of_week ASC, time ASC`,
+  );
+  return result.rows;
 }
 
 export async function getCustomScheduleForDay(dayOfWeek: number): Promise<ScheduleRow[]> {
   await initDb();
-  return (await sql`
-    SELECT * FROM custom_schedule WHERE day_of_week = ${dayOfWeek} ORDER BY time ASC
-  `) as ScheduleRow[];
+  const result = await getPool().query<ScheduleRow>(
+    `SELECT * FROM custom_schedule WHERE day_of_week = $1 ORDER BY time ASC`,
+    [dayOfWeek],
+  );
+  return result.rows;
 }
 
 export interface ScheduleEntryInput {
@@ -243,16 +252,24 @@ export interface ScheduleEntryInput {
 
 export async function replaceCustomSchedule(entries: ScheduleEntryInput[]): Promise<void> {
   await initDb();
-  const queries = [
-    sql`DELETE FROM custom_schedule`,
-    ...entries.map(
-      (e) => sql`
-        INSERT INTO custom_schedule (day_of_week, medication_id, time, enabled, notes)
-        VALUES (${e.day_of_week}, ${e.medication_id}, ${e.time}, ${e.enabled}, ${e.notes ?? null})
-      `,
-    ),
-  ];
-  await sql.transaction(queries);
+  const client = await getPool().connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('DELETE FROM custom_schedule');
+    for (const e of entries) {
+      await client.query(
+        `INSERT INTO custom_schedule (day_of_week, medication_id, time, enabled, notes)
+         VALUES ($1, $2, $3, $4, $5)`,
+        [e.day_of_week, e.medication_id, e.time, e.enabled, e.notes ?? null],
+      );
+    }
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
 }
 
 export interface PushSubscriptionRow {
@@ -269,25 +286,30 @@ export async function upsertPushSubscription(input: {
   auth: string;
 }): Promise<void> {
   await initDb();
-  await sql`
-    INSERT INTO push_subscriptions (endpoint, p256dh, auth)
-    VALUES (${input.endpoint}, ${input.p256dh}, ${input.auth})
-    ON CONFLICT (endpoint) DO UPDATE SET
-      p256dh = EXCLUDED.p256dh,
-      auth = EXCLUDED.auth
-  `;
+  await getPool().query(
+    `INSERT INTO push_subscriptions (endpoint, p256dh, auth)
+     VALUES ($1, $2, $3)
+     ON CONFLICT (endpoint) DO UPDATE SET
+       p256dh = EXCLUDED.p256dh,
+       auth = EXCLUDED.auth`,
+    [input.endpoint, input.p256dh, input.auth],
+  );
 }
 
 export async function deletePushSubscription(endpoint: string): Promise<void> {
   await initDb();
-  await sql`DELETE FROM push_subscriptions WHERE endpoint = ${endpoint}`;
+  await getPool().query(
+    `DELETE FROM push_subscriptions WHERE endpoint = $1`,
+    [endpoint],
+  );
 }
 
 export async function getAllPushSubscriptions(): Promise<PushSubscriptionRow[]> {
   await initDb();
-  return (await sql`
-    SELECT id, endpoint, p256dh, auth, created_at FROM push_subscriptions
-  `) as PushSubscriptionRow[];
+  const result = await getPool().query<PushSubscriptionRow>(
+    `SELECT id, endpoint, p256dh, auth, created_at FROM push_subscriptions`,
+  );
+  return result.rows;
 }
 
 export async function hasPushBeenSent(
@@ -296,12 +318,13 @@ export async function hasPushBeenSent(
   triggerType: string,
 ): Promise<boolean> {
   await initDb();
-  const rows = (await sql`
-    SELECT 1 FROM push_log
-    WHERE date = ${date} AND bracket = ${bracket} AND trigger_type = ${triggerType}
-    LIMIT 1
-  `) as unknown[];
-  return rows.length > 0;
+  const result = await getPool().query(
+    `SELECT 1 FROM push_log
+     WHERE date = $1 AND bracket = $2 AND trigger_type = $3
+     LIMIT 1`,
+    [date, bracket, triggerType],
+  );
+  return result.rows.length > 0;
 }
 
 export async function recordPushSent(
@@ -310,11 +333,12 @@ export async function recordPushSent(
   triggerType: string,
 ): Promise<boolean> {
   await initDb();
-  const rows = (await sql`
-    INSERT INTO push_log (date, bracket, trigger_type)
-    VALUES (${date}, ${bracket}, ${triggerType})
-    ON CONFLICT (date, bracket, trigger_type) DO NOTHING
-    RETURNING id
-  `) as unknown[];
-  return rows.length > 0;
+  const result = await getPool().query(
+    `INSERT INTO push_log (date, bracket, trigger_type)
+     VALUES ($1, $2, $3)
+     ON CONFLICT (date, bracket, trigger_type) DO NOTHING
+     RETURNING id`,
+    [date, bracket, triggerType],
+  );
+  return result.rows.length > 0;
 }
