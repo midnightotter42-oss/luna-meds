@@ -32,6 +32,15 @@ export function initDb(): Promise<void> {
     `);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_logs_date ON logs(date)`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_logs_date_med ON logs(date, medication_id)`);
+    // Ruim duplicaten op voor de unique index aangemaakt wordt
+    await pool.query(`
+      DELETE FROM logs WHERE id IN (
+        SELECT id FROM (
+          SELECT id, ROW_NUMBER() OVER (PARTITION BY date, medication_id ORDER BY id) AS rn
+          FROM logs WHERE taken = 1
+        ) sub WHERE rn > 1
+      )
+    `);
     await pool.query(`
       CREATE UNIQUE INDEX IF NOT EXISTS idx_logs_unique_taken
         ON logs(date, medication_id) WHERE taken = 1
